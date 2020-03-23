@@ -3,7 +3,7 @@
  
 This program allows the user to access a Memory Dump. It can also function as a plugin to the Volatility Framework (<https://github.com/volatilityfoundation/volatility>).
 This program functions similarly to Process Explorer/Hacker, but additionally it allows the user access to a Memory Dump (or access the real-time memory on the computer using Memtriag).
-This program can run from Windows and Linux machines, but can only use Windows memory images.
+This program can run from Windows, Linux and MacOS machines, but can only use Windows memory images.
 
 ### Quick Start
 1. Download the volexp.py file (download the memtriage.py file as well and replace it with your memtriage.py file if you want to use memtriage <https://github.com/gleeda/memtriage>).
@@ -54,7 +54,7 @@ also optional).
 
 
 - Additionally, the program supports struct analysis. (writing on the memory's struct, running Volatility functions on a struct is available).
- Example of getting the token sids from the _EPROCESS struct:
+ Example of getting all the load modules inside _EPROCESS struct in another struct analyzer window:
 
 ![Struct Analyzer](https://github.com/memoryforensics1/info/blob/master/StructAnalyzer.png)
 
