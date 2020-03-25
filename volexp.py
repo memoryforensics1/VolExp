@@ -2009,6 +2009,10 @@ def dump_explorer_file(offset, directory=None):
 	global volself
 	global lock
 
+	# Change to hex value (if not str).
+	if not type(offset) is str:
+		offset = hex(offset)
+
 	# Remove the L (long).
 	if offset.endswith('L'):
 		offset = offset[:-1]
@@ -2024,7 +2028,7 @@ def dump_explorer_file(offset, directory=None):
 	def_conf.OFFSET = None
 	def_conf.PID = None
 	def_conf.REGEX = None
-	def_conf.PHYSOFFSET = str(hex(offset))
+	def_conf.PHYSOFFSET = offset
 	def_conf.kaddr_space = utils.load_as(def_conf)
 	def_conf.optparser.set_conflict_handler("resolve")
 
@@ -2785,7 +2789,7 @@ class Threads(Frame):
 		# Get the dissasemble data of this thread start address (only after we get the lock).
 		with lock:
 
-			hex_dis = volself.disassemble(self.proc.get_process_address_space(), start_addr if type(start_addr) is int else (start_addr.strip('L'), 16))
+			hex_dis = volself.disassemble(self.proc.get_process_address_space(), start_addr if type(start_addr) is not str else (start_addr.strip('L')))
 
 		# Create and config the Toplevel
 		app = tk.Toplevel()
@@ -4073,6 +4077,7 @@ class Explorer(Frame):
 		# Go to the path specify if specify
 		if path:
 			change_path, file_name = path
+			change_path = '\ {}'.format(change_path)
 			self.directory_queue.append('')
 			
 			# Go to the directory.
@@ -4211,9 +4216,10 @@ class Explorer(Frame):
 		self.DetroyLV()
 
 		# Alert the user that this path not exist (except if he try to delete).
-		if not db_pointer and not (event and event.keysym.lower() == 'backspace'):
-			self.bell()
-			messagebox.showerror('Error', 'Explorer Can\'t Find {},\nCheck the spelling and try again.'.format(data), parent=self)
+		if not db_pointer:
+			if not (event and event.keysym.lower() == 'backspace'):
+				self.bell()
+				messagebox.showerror('Error', 'Explorer Can\'t Find {},\nCheck the spelling and try again.'.format(data), parent=self)
 			return
 
 		values = []
@@ -6715,13 +6721,13 @@ class TreeTable(Frame):
 			if col and tv.column(col, 'id') != self.col_from_id:
 				self.swap(tv, self.col_from_id, col, 'right' if self.current_x - self.last_x > 0 else 'left')
 
-
-		# Create small square with information
-		_iid = self.tree.identify_row(event.y)
-		# If hold on table header
-		if not _iid or not self.tree.identify_column(event.x)[1:]:
-			return
 		try:
+			# Create small square with information
+			_iid = self.tree.identify_row(event.y)
+			# If hold on table header
+			if not _iid or not self.tree.identify_column(event.x)[1:]:
+				return
+
 			item = self.tree.item(_iid)
 		except:
 			return # Problem with tk version
@@ -7797,7 +7803,9 @@ class ProcessesTable(TreeTable):
 
 		heaps = {}
 		heaps_segment = {}
-		for heap in task.Peb.ProcessHeaps.dereference():
+		task_peb = task.Peb
+		
+		for heap in task_peb.ProcessHeaps.dereference():
 			heaps[int(heap.obj_offset)] = heap.ProcessHeapsListIndex
 
 			# Don't check on xp. (todo-> Check the version instead)
@@ -7806,8 +7814,8 @@ class ProcessesTable(TreeTable):
 					heaps_segment[int(heap_segment.obj_offset)] = heap.ProcessHeapsListIndex
 
 
-		# This is all other memory types (check if we have them in this spesific version).
-		task_peb = task.Peb
+		# This is all other memory types.
+		
 		other_memory_range = {task_peb.obj_offset: 'PEB',
 							  task_peb.ReadOnlySharedMemoryBase.v(): 'Read Only Memory Base', # Shared / static server data...
 							  task_peb.GdiSharedHandleTable.v(): 'Gdi Shared Handle Table',
@@ -7822,11 +7830,24 @@ class ProcessesTable(TreeTable):
 
 		stacks = {}
 		for thread in task.ThreadListHead.list_of_type("_ETHREAD", "ThreadListEntry"):
-			teb = obj.Object("_TEB",
-			                 offset=thread.Tcb.Teb,
-			                 vm=task.get_process_address_space())
+			teb = obj.Object("_TEB", offset=thread.Tcb.Teb, vm=task.get_process_address_space())
 			if teb:
-				stacks[teb.NtTib.StackBase] = int(thread.Cid.UniqueThread)
+
+				# Check terminated thread (also with exit time).
+				if 'PS_CROSS_THREAD_FLAGS_TERMINATED' in str(thread.CrossThreadFlags) or int(thread.ExitTime) != 0:
+					status = 'Terminate'
+				else:
+					# If thread is waiting get also the wait reason
+					if thread.Tcb.State == 5:
+						status = '{} ({})'.format(str(thread.Tcb.State), str(thread.Tcb.WaitReason))
+					else:
+						status = str(thread.Tcb.State)
+
+				# Stack Commit memory
+				stacks[teb.NtTib.StackBase.v()] = 'Stack Base (tid: {}) [{}]'.format(int(thread.Cid.UniqueThread), status)
+
+				# From StackLimit to here is the resered memory to the stack.
+				stacks[teb.DeallocationStack.v()] = 'Stack Reserved | Stack Guard start from {} (tid: {}) [{}]'.format(hex(teb.NtTib.StackLimit.v()), int(thread.Cid.UniqueThread), status)
 
 		vad_data = []
 
@@ -7880,7 +7901,7 @@ class ProcessesTable(TreeTable):
 					if vad.Start in other_memory_range:
 						use = other_memory_range[vad.Start]
 					elif vad.Start in stacks:
-						use = 'Stack (tid: {})'.format(stacks[vad.Start])
+						use = stacks[vad.Start]
 					elif vad.Start in heaps:
 						use = 'Heap (ID {})'.format(heaps[vad.Start])
 					elif vad.Start in heaps_segment:
@@ -7892,9 +7913,9 @@ class ProcessesTable(TreeTable):
 					flags2 = str(vad.u2.VadFlags2)
 				except AttributeError:
 					pass
-				vad_data.append([hex(vad.Start) if isinstance(thread.StartAddress, long) or isinstance(thread.StartAddress, int) else str(thread.StartAddress),
+				vad_data.append([hex(vad.Start).replace('L', '') if isinstance(vad.Start, long) or isinstance(vad.Start, int) else str(vad.StartAddress).replace('L', ''),
 				                 hex(vad.End),
-				                 hex(vad.End - vad.Start),
+				                 hex(vad.End - vad.Start).replace('L', ''),
 				                 str("{} ({})".format(vad.Tag, vad.tag_map[str(vad.Tag)]) if vad.Tag else ''),
 				                 str(vad.VadFlags or ''),
 				                 str(protection or ''),
