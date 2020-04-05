@@ -37,19 +37,24 @@ also optional).
 
 - To present more information of a process, Double-Click (or Left-Click and select Properties) to bring up an information window.
 
-![Process properties](https://github.com/memoryforensics1/info/blob/master/ProcessProperties.PNG)
+![Process properties](https://github.com/memoryforensics1/info/blob/master/ImageProperties.png)
+
+
+- Or present more information on any PE.
+
+![PE properties](https://github.com/memoryforensics1/info/blob/master/PeProperties.png)
 
 
 
 - The program allows the user to view the files in the Memory Dump as well as their information. Additionally it allows the user to extract those files (HexDump/strings view is also optional).
 
-![File Explorer](https://github.com/memoryforensics1/info/blob/master/FileExplorer.PNG)
+![File Explorer](https://github.com/memoryforensics1/info/blob/master/FilesExplorer.png)
 
 
 
 - The program supports viewing of the Windows Objects and files's matadata (MFT). 
 
-![Other Explorers (Winobj and MFT explorer)](https://github.com/memoryforensics1/info/blob/master/explorers.GIF)
+![Other Explorers (Winobj and MFT explorer)](https://github.com/memoryforensics1/info/blob/master/Explorers.png)
 
 
 
@@ -60,10 +65,16 @@ also optional).
 
 
 
-- The Program is also capable of automatically marking suspicious processes found by the plugin.
+- The Program is also capable of automatically marking suspicious processes found by another plugin.
 Example of a running threadmap plugin:
 
 ![Cmd Plugin run threadmap](https://github.com/memoryforensics1/info/blob/master/threadmapExample.GIF)
+
+
+
+- View memory use of a process.
+
+![Vad Information](https://github.com/memoryforensics1/info/blob/master/VadInformation.png)
 
 
 - Manually marking a certain process and adding a sidenote on it. 
