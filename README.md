@@ -2,7 +2,7 @@
 ## Volatility Explorer
  
 This program allows the user to access a Memory Dump. It can also function as a plugin to the Volatility Framework (<https://github.com/volatilityfoundation/volatility>).
-This program functions similarly to Process Explorer/Hacker, but additionally it allows the user access to a Memory Dump (or access the real-time memory on the computer using Memtriag).
+This program functions similarly to Process Explorer/Hacker, but additionally it allows the user access to a Memory Dump (or access the real-time memory on the computer using Memtriage).
 This program can run from Windows, Linux and MacOS machines, but can only use Windows memory images.
 
 ### Quick Start
@@ -55,6 +55,12 @@ also optional).
 - The program supports viewing of the Windows Objects and files's matadata (MFT). 
 
 ![Other Explorers (Winobj and MFT explorer)](https://github.com/memoryforensics1/info/blob/master/Explorers.png)
+
+
+
+- The program also support viewing a regview of the memory dump
+
+![RegView](https://github.com/memoryforensics1/info/blob/master/RegView.png)
 
 
 
