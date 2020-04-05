@@ -42,7 +42,7 @@ also optional).
 
 - Or present more information on any PE.
 
-![PE properties](https://github.com/memoryforensics1/info/blob/master/PeProperties.png)
+![PE properties](https://github.com/memoryforensics1/info/blob/master/PeProeprties.png)
 
 
 
@@ -81,5 +81,5 @@ Example of a running threadmap plugin:
 
 - User's actions can be saved on a seperate file for later usage.
 
-### get help :
+### get help: https://github.com/memoryforensics1/VolExp/wiki/VolExp-help:
 ![volexp help](https://github.com/memoryforensics1/info/blob/master/help.gif)
