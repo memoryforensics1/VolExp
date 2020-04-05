@@ -1,68 +1,57 @@
 #!/usr/bin/python
+# VolExp
+# Author: Aviel Zohar
+# See license information on VolExp github page: https://github.com/memoryforensics1/VolExp
+# Contact: memoryforensicsanalysis@gmail.com
+# Description:
+# This programs allows you to analyze a memory image (also supported as a volatility plugin)
+# using a gui app very similar to process hacker/explorer.
+# For more information and help go to the github page above
+# To get offline help use the menu: Help->Display Help or press F11.
 # Imports
-import tempfile
-import pickle
-import string
-import json
-import copy
-import functools
-import Queue
-import volatility.conf as conf
-import volatility.win32.tasks as tasks
-import volatility.utils as utils
-import volatility.obj as obj
-import volatility.commands as commands
-import volatility.plugins.common as common
-import volatility.plugins.taskmods as taskmods
-import volatility.plugins.procdump as procdump
-import volatility.plugins.vadinfo as vadinfo
-import volatility.plugins.verinfo as verinfo
-import volatility.plugins.malware.impscan as impscan
-import volatility.plugins.mftparser as mftparser
-import volatility.plugins.filescan as filescan
-import volatility.win32 as win32
-import volatility.debug as debug
-import volatility.registry as registry
-import volatility.win32.rawreg as rawreg
-import volatility.plugins.dumpfiles as dumpfiles
-import volatility.plugins.privileges as privileges
-from volatility.plugins.kdbgscan import KDBGScan
-from hashlib import sha256
+import urllib					# virustotal check.
+from webbrowser import open_new # go to github page
+import StringIO, string, pickle, re
+import os, sys, time, logging, random, copy
+import threading, Queue, subprocess, ast, inspect, functools
+import turtle, ttk
+from turtle import ScrolledCanvas, RawTurtle, TurtleScreen
+from ttk import Frame, Treeview, Scrollbar, Progressbar, Combobox
 import Tkinter as tk
 from Tkinter import N, E, W, S, END, YES, BOTH, PanedWindow, Tk, VERTICAL, LEFT, Menu, StringVar, RIGHT, HORIZONTAL, X, Y, BOTTOM, Text, NONE, SOLID, TOP, INSERT
+import tkFont
+import tkFileDialog
+import tkColorChooser
+import tkSimpleDialog
 import ScrolledText as scrolledtext
 import tkMessageBox as messagebox
-import tkColorChooser
-import tkFileDialog
-import tkSimpleDialog
-from ttk import Frame, Treeview, Scrollbar, Progressbar, Combobox
-from turtle import ScrolledCanvas, RawTurtle, TurtleScreen
-import turtle
-import random
-import ttk
-import tkFont
-import logging
-import threading
-import os
-import time
-import ctypes
-import time
-import re
-import StringIO
-import inspect
-import sys
-import subprocess
-import ast
-import urllib
-from webbrowser import open_new
+import volatility.obj as obj
+import volatility.conf as conf
+import volatility.win32 as win32
+import volatility.debug as debug
+import volatility.utils as utils
+import volatility.commands as commands
+import volatility.registry as registry
+import volatility.win32.tasks as tasks
+import volatility.win32.rawreg as rawreg
+import volatility.plugins.common as common
+import volatility.plugins.vadinfo as vadinfo
+import volatility.plugins.verinfo as verinfo
+import volatility.plugins.filescan as filescan
+import volatility.plugins.taskmods as taskmods
+import volatility.plugins.procdump as procdump
+import volatility.plugins.mftparser as mftparser
+import volatility.plugins.dumpfiles as dumpfiles
+import volatility.plugins.privileges as privileges
+import volatility.plugins.malware.impscan as impscan
 
 #region Try imports
 try:
 	from ttkthemes import ThemedStyle
 	has_themes = True
-except:
+except ImportError:
 	has_themes = False
-	#print "Install ttkthemes for better themes on this plugin"
+	print "Install ttkthemes for better themes on volexp"
 
 try:
 	import volatility.plugins.getsids as getsids
@@ -75,7 +64,7 @@ except Exception as ex:
 try:
 	import distorm3
 	has_distorm = True
-except:
+except ImportError:
 	has_distorm = False
 	debug.warning("Please install distorm3 to see disassemble stuff..")
 
@@ -83,19 +72,24 @@ try:
 	import volatility.plugins.winobj as winobj
 	has_winobj = True
 except Exception as ex:
-	has_winobj = False
-	debug.warning("You get this error because you dont have the winobj plugin (by shachaf atun[kslgroup]), Please download this plugin for enumerate object in gui.\nThe Error:\n {}".format(ex))
+	try:
+		import volatility.plugins.community.winobj as winobj
+	except Exception as ex:
+		has_winobj = False
+		debug.warning("You get this error because you dont have the winobj plugin (by shachaf atun[kslgroup]), Please download this plugin for enumerate object in gui.\nThe Error:\n {}".format(ex))
 
 try:
 	import requests
 	has_requests = True
-except:
+except ImportError:
 	has_requests = False
 	debug.warning('to run this plugin using virustotal result please install requests module (run on shell "pip install requests")')
 
 #endregion Try Imports
 
 #region Constans and globals
+# all the globals kept here.
+# also the icon images save here encoded with base-64 to make the plugin only one file.
 
 right_click_event = '<Button-2>' if sys.platform == 'darwin' else '<Button-3>'
 
@@ -1737,8 +1731,8 @@ TIP_LIST = ['Tip of the investigation\nAll the explorers have a search [ctrl+f] 
 			'Tip of the investigation\nMFT explorer is very verbose use ctrl+f (serach) to help your self find the data you wish',
 			'Tip of the investigation\nAll explorers search [ctrl+f] have a feature to search on any field you wish\n(File Explorer, WinObj Explorer, MFT explorer, Struct Analyze)',
 			'Tip of the investigation\nIf you need more information on something you probebly can get this data using struct analyze',
-			'Tip of the investigation\nPress ctrl+f on any table and it will restore you to the default state (if you filter some header)',
-			'Tip of the investigation\nOn any table you can select\hide some columns (some of them dont display all the information by default)',]
+			'Tip of the investigation\nOn any table you can select\hide some columns (some of them dont display all the information by default)',
+			'Tip of the investigation\nOn any table you can rollback to the original order using ctrl+t (unfilter)',]
 
 ASCII = r" 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#\$%&\'\(\)\*\+,-\./:;<=>\?@\[\]\^_`\{\|\}\\\~\t"
 ABS_X = 60
@@ -1777,7 +1771,7 @@ winobj_dict = {}
 reg_dict = {}
 service_dict = {}
 all_plugins = ['path',[]]
-done_run = {'files_info': False, 'process_dlls': process_dlls, 'process_handles': process_handles, 'process_bases': False, 'process_threads': process_threads, 'process_performance': process_performance,
+done_run = {'files_info': False, 'process_dlls': process_dlls, 'process_handles': False, 'process_bases': False, 'process_threads': process_threads, 'process_performance': process_performance,
 			'process_connections': False, 'process_imports': False,'process_env_var': False, 'process_security': False, 'process_comments': process_comments, 'plugins_output': plugins_output,
 			'mft_explorer': False, 'files_scan': False, 'winobj_dict': False, 'tree_view_data': tree_view_data, 'reg_dict': False, 'service_dict': False, 'process_tree_data': process_tree_data}
 
@@ -1973,7 +1967,12 @@ def run_struct_analyze(struct_type, address, app=None, pid=4, as_thread=True, wr
 
 	sa_conf.PID = pid
 	my_sa = StructAnalyze(sa_conf)
-	my_sa.calculate()
+	
+	# Unable to parse an object
+	try:
+		my_sa.calculate()
+	except Exception as ex:
+		print ex
 
 	if as_thread:
 		global queue
@@ -2000,7 +1999,6 @@ def run_struct_analyze(struct_type, address, app=None, pid=4, as_thread=True, wr
 
 	job_queue.put_alert((id, 'Struct Analyzer', '{}, args: {} ({})'.format(struct_type, address, pid), 'Done'))
 
-#CHANGE
 def dump_explorer_file(offset, directory=None):
 	'''
 	Dump a file object from the memory offset to the HD (self._config.DUMP-DIR).
@@ -2028,24 +2026,30 @@ def dump_explorer_file(offset, directory=None):
 	def_conf.OFFSET = None
 	def_conf.PID = None
 	def_conf.REGEX = None
-	def_conf.PHYSOFFSET = offset
 	def_conf.kaddr_space = utils.load_as(def_conf)
+
+	# If windows 10 we need to take the physical address. (remove when mic fix this in dumpfiles plugin)
+	if (def_conf.kaddr_space.profile.metadata.get("major"), def_conf.kaddr_space.profile.metadata.get("minor")) == (6, 4):
+		def_conf.PHYSOFFSET = hex(def_conf.kaddr_space.vtop(int(offset, 16) if offset.startswith('0x') else int(offset))).replace('L', '')
+	else:
+		def_conf.PHYSOFFSET = offset
+		
+	# Resolve optparser conflicts
 	def_conf.optparser.set_conflict_handler("resolve")
 
-	df = dumpfiles.DumpFiles(def_conf)
-	df_calc = df.calculate()
-	summaryinfo = None
+	# Validate parametets
 	if self._config.DUMP_DIR == None:
 		debug.warning("Please specify a dump directory (--dump-dir)")
 		return
-
-
-	if not os.path.isdir(self._config.DUMP_DIR):
+	elif not os.path.isdir(self._config.DUMP_DIR):
 		debug.warning(self._config.DUMP_DIR + " is not a directory")
 		return
 
-	file_mem = {}
+	dumpfiles.debug.error = lambda e: sys.stderr.write('[-] Invalid PHYSOFFSET\n')
+	df = dumpfiles.DumpFiles(def_conf)
+	df_calc = df.calculate()
 
+	file_mem = {}
 	for summaryinfo in df_calc:
 		file_mem[summaryinfo['type']] = ''
 
@@ -2460,9 +2464,9 @@ class Image(Frame):
 		app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 
 		FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"),
-					 view_hex=True, searchTitle='Search For Files', path=(change_path, file_name), relate=app).pack(fill=BOTH, expand=YES,)
+					 view_hex=True, searchTitle='Search For Files', path=os.path.join(change_path, file_name), relate=app).pack(fill=BOTH, expand=YES,)
 		app.title("Files Explorer")
-		app.geometry("700x450")
+		app.geometry("1400x650")
 
 	def path_click(self, event=None):
 		'''
@@ -2535,7 +2539,8 @@ class Image(Frame):
 
 		# Path button and text widget
 		path_button = ttk.Button(lf, text="Path:", command=self.path_click)
-		path_button.pack(fill=tk.BOTH)#anchor="w", ipadx=10)
+		ToolTip(path_button, "Open In Explorer")
+		path_button.pack(fill=tk.BOTH)
 		txt_entry = ttk.Entry(rf, width=txt_width)
 		txt_entry.insert(0, self.path)
 		txt_entry.state(['readonly'])
@@ -2543,6 +2548,7 @@ class Image(Frame):
 
 		# Current Directory button and txt widget
 		dir_button = ttk.Button(lf, text="Current Directory:", command=self.current_directory_click)
+		ToolTip(dir_button, "Open In Explorer")
 		dir_button.pack(anchor="w")
 		txt_entry = ttk.Entry(rf, width=txt_width)
 		txt_entry.insert(0, self.current_directory)
@@ -2767,7 +2773,7 @@ class Threads(Frame):
 
 		# Create the threads table
 		self.thread_treetable = TreeLable(self, headers=("Tid", "Start Addr", "Flag", "Stack Base", "Base Priority", "Priority", "User Time", "Kernel Time", "Create Time", "Offset"), data=data, display=('Tid', 'Flag', 'Create Time'))
-
+		self.thread_treetable.tree['height'] = 7 if len(data) > 7 else len(data)
 
 		# Add the HexDump and StructAnalysis options
 		self.thread_treetable.aMenu.add_command(label='HexDump', command=lambda: self.viewHexDump(0))
@@ -2808,6 +2814,7 @@ class Threads(Frame):
 
 		# Create the tables
 		dis_tree = TreeTable(pw, headers=('Address', 'OP', 'Disasmble'), data=hex_dis[1].splitlines())
+		dis_tree.tree['height'] = 7 if 7 < len(data) else len(data)
 		hex_tree = TreeTable(pw, headers=('Address', "Hex", "Dump"), data=hex, resize=True)
 		pw.add(dis_tree)
 		pw.add(hex_tree)
@@ -3124,7 +3131,7 @@ class PEImage(Frame):
 			messagebox.showwarning('Notice', 'Still searching for the information\nPlease try again later.', parent=self)
 			return
 		elif not('\\' in path or '/' in path):
-			messagebox.showerror('Error', 'This process path is invalid', parent=self)
+			messagebox.showerror('Error', 'This path is invalid', parent=self)
 			return
 
 		# Process Envars
@@ -3168,9 +3175,9 @@ class PEImage(Frame):
 		app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 		print change_path, file_name
 		FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"),
-					 view_hex=True, searchTitle='Search For Files', path=(change_path, file_name), relate=app).pack(fill=BOTH, expand=YES,)
+					 view_hex=True, searchTitle='Search For Files', path=os.path.join(change_path, file_name), relate=app).pack(fill=BOTH, expand=YES,)
 		app.title("Files Explorer")
-		app.geometry("700x450")
+		app.geometry("1400x650")
 
 	def path_click(self, event=None):
 		'''
@@ -3265,6 +3272,7 @@ class PEImage(Frame):
 		# Path button and text widget
 		path_frame = ttk.Frame(left_frame)
 		path_button = ttk.Button(path_frame, text="Path:\t\t\t", command=self.path_click)
+		ToolTip(path_button, "Open In Explorer")
 		path_button.pack(side=LEFT)
 		self.path = str(path)
 		#txt_width = tkFont.Font().measure(self.path) / 7
@@ -3560,11 +3568,11 @@ class RegViewer(Frame):
 
 		# Init the radio button for value, data search.
 		self.var = tk.StringVar()
-		self.r1 = ttk.Radiobutton(self.frame2, text='View Data (Slow, Searching) ', width=20, variable=self.var, value=True,
+		self.r1 = ttk.Radiobutton(self.frame2, text='View Data (Slow, Searching).', width=20, variable=self.var, value=True,
 							 command=self.viewKeys,
 							 style='IndicatorOff.TRadiobutton')
 		self.r1.pack(fill='x')
-		self.r2 = ttk.Radiobutton(self.frame2, text="Don\'t View Data (Fast) ", width=20, variable=self.var, value=False,
+		self.r2 = ttk.Radiobutton(self.frame2, text="Don\'t View Data (Fast).", width=20, variable=self.var, value=False,
 							 command=self.viewKeys,
 							 style='IndicatorOff.TRadiobutton')
 		self.r2.pack(fill='x')
@@ -4037,7 +4045,7 @@ class Explorer(Frame):
 		self.entry_directory = ttk.Entry(top_frame)
 		self.entry_directory.bind("<KeyRelease>", self.KeyRelease)
 		self.entry_directory.bind("<FocusOut>", lambda e: self.after(250, self.FoucusOut))
-		self.entry_directory.bind("<Return>", self.Enter)
+		self.entry_directory.bind("<Return>", self.LVEnter)
 		self.entry_directory.pack(fill='x', ipady=1, pady=1)
 		self.c_selection = 0
 
@@ -4048,6 +4056,7 @@ class Explorer(Frame):
 
 		# Init stuff like button, tree and bind events
 		self.current_directory = ""
+		self.last_data = self.last_tw = self.tw = None
 		self.directory_queue = []
 		self.directory_requeue = []
 		self.tree = TreeTable(self, headers=headers, data=data, resize=resize)
@@ -4076,19 +4085,7 @@ class Explorer(Frame):
 
 		# Go to the path specify if specify
 		if path:
-			change_path, file_name = path
-			change_path = '\ {}'.format(change_path)
-			self.directory_queue.append('')
-			
-			# Go to the directory.
-			self.GoTo(change_path, True)
-
-			# Go all over the items and select the right one.
-			for ht_row in self.tree.tree.get_children():
-				if str(self.tree.tree.item(ht_row)['values'][0]).lower() == str(file_name).lower():
-					self.tree.tree.focus(ht_row)
-					self.tree.tree.selection_set(ht_row)
-					queue.put((self.tree.tree.see, (ht_row,)))
+			self.GoToFile(path, True)
 		else:
 
 			# If the first explorer have only one item go inside this item (recursively).
@@ -4100,6 +4097,15 @@ class Explorer(Frame):
 			
 			# Go to the directory.
 			self.GoTo(change_path)
+
+		# Bind exit if this is toplevel.
+		if not relate or self.winfo_toplevel() != relate:
+			def on_exit():
+				self.DetroyLV()
+				self.master.destroy()
+
+			# Exit the popup list.
+			self.winfo_toplevel().protocol("WM_DELETE_WINDOW", on_exit)
 
 	def control_f(self, event=None):
 		'''
@@ -4122,10 +4128,17 @@ class Explorer(Frame):
 		:return: db pointer dictionary somewhere inside the dictionary that describe the given path.
 		'''
 		db_pointer = self.dict
-		path_list = path.split("\\")[1:]
+		path_list = path.split("\\")
+		
+		# Remove none item.
+		if path_list[0] == '':
+			path_list = path_list[1:]
+			
+		# Return in empty path.
 		if return_none_on_bad_path and len(path_list) == 0:
 			return
 
+		current_path = ''
 		index = 0
 		for key in path_list:
 			if db_pointer.has_key(key):
@@ -4139,20 +4152,34 @@ class Explorer(Frame):
 						break
 				else:
 
-					if return_none_on_bad_path and len(path_list) -1  > index:
+					if len(path_list) == index+1:
+						continue
+
+					if return_none_on_bad_path:
 						return
 
 					# Unable to find the full go_to path
 					ans = messagebox.askyesnocancel("Notice",
-													"Unnable to find this path ({}),\nthis path found: {} do you want to go there?".format(
-														go_to, go_to[:go_to.index(key)]), parent=self)
+													"Unnable to find this path ({}),\n\nThis path found: {}\nDo you want to go there?".format(
+														path, current_path), parent=self)
 					if not ans:
 						return
+					else:
+						# Set the curernt directory.
+						self.current_directory = current_path
+						self.entry_directory.delete(0, tk.END)
+						self.entry_directory.insert(0, self.current_directory)
+						return db_pointer
 
 			elif return_none_on_bad_path and len(path_list) -1  > index:
 				return
 			index += 1
+			current_path += '\{}'.format(key)
 
+		# Set the curernt directory.
+		self.current_directory = path
+		self.entry_directory.delete(0, tk.END)
+		self.entry_directory.insert(0, self.current_directory)
 		return db_pointer
 
 	def GetDataAndDirectories(self, db_pointer):
@@ -4194,11 +4221,12 @@ class Explorer(Frame):
 		:param event: None
 		:return: None
 		'''
+		data = self.entry_directory.get()
 
 		# If key down or up or left or right or enter return and let the other handle handle it.
-		if event.keysym_num in [65361, 65362, 65363, 65293]:
+		if event and event.keysym_num in [65361, 65362, 65363, 65293]:
 			return
-		elif event.keysym_num in [65364, 65307] and hasattr(self, 'tw') and self.tw.winfo_exists(): # Key down
+		elif event and event.keysym_num in [65364, 65307] and self.tw and self.tw.winfo_exists(): # Key down
 
 			# If ESC pressed detroyd the window and return
 			if event.keysym_num == 65307:
@@ -4206,14 +4234,21 @@ class Explorer(Frame):
 
 			return
 
-		data = self.entry_directory.get()
+		# Return if non printable key pressed (nothing add to the entry_directory).
+		elif event and event.keysym_num != 65364:# and self.tw:
+			if data == self.last_data:
+				return
+
+		if self.tw:
+			self.DetroyLV()
 
 		# Add the \ if the entry is empty.
 		if data == '':
 			data = '\\'
 
-		db_pointer = self.GetDBPointer(data, return_none_on_bad_path=True)
-		self.DetroyLV()
+		self.last_data = data
+
+		db_pointer = self.GetDBPointer(data, True, return_none_on_bad_path=True)
 
 		# Alert the user that this path not exist (except if he try to delete).
 		if not db_pointer:
@@ -4240,14 +4275,15 @@ class Explorer(Frame):
 			y = self.entry_directory.winfo_rooty() + 20
 
 			# Create the top level with frame.
+			self.last_tw = str(self.tw)
 			self.tw = tw = tk.Toplevel()
-			self.my_frame =ttk.Frame(self.tw, width=self.entry_directory.winfo_reqwidth() - 1)
+			self.my_frame = ttk.Frame(self.tw, width=self.entry_directory.winfo_reqwidth() - 1)
 			self.values = values
 			tw.wm_overrideredirect(1)
 			tw.wm_geometry("+%d+%d" % (x, y))
 
 			# Create and pack the listbox with scrollbar
-			self.lv = lv = tk.Listbox(self.my_frame, height = len(values) if len(values) < 10 else 10)#, width = self.entry_directory.winfo_reqwidth())#, height = len(values) if len(values) < 10 else 10)
+			self.lv = lv = tk.Listbox(self.my_frame, height = len(values) if len(values) < 10 else 10)
 			self.scrollbar = scrollbar = Scrollbar(self.my_frame, orient="vertical")
 			scrollbar.config(command=self.lv.yview)
 			scrollbar.pack(side=tk.RIGHT, fill="y")
@@ -4268,7 +4304,8 @@ class Explorer(Frame):
 
 			# Bind Escape - > destroy and click -> open to the listbox.
 			lv.bind("<Escape>", self.DetroyLV)
-			lv.bind('<Button-1>', self.LVEnter)
+			#lv.bind('<Button-1>', self.LVEnter)
+			lv.bind('<ButtonRelease-1>', self.LVEnter)
 
 			# pack all the data.
 			lv.pack(fill=tk.BOTH)
@@ -4299,7 +4336,6 @@ class Explorer(Frame):
 		self.lv.yview(self.c_selection)
 		self.lv.selection_set(self.c_selection)
 
-
 	def Up(self, event):
 		'''
 		KeyUp event - set selection to one up item
@@ -4323,26 +4359,29 @@ class Explorer(Frame):
 		:param event: None
 		:return: None
 		'''
-		if not hasattr(self, 'tw') or len(self.lv.curselection()) == 0:
-			self.Enter()
+
+		# Check if we exit the window and this didnt destroyd
+		if not self.entry_directory.winfo_exists():
+			self.tw.destroy()
 			return
 
-		# Put the current directory on the go back list.
-		self.directory_queue.append(self.current_directory)
-
-		# Update the entry directory.
-		self.entry_directory.delete(0, tk.END)
-		self.entry_directory.insert(0, self.lv.get(self.lv.curselection()))
+		# If there is no goto and popup return.
+		if self.tw and len(self.lv.curselection()) != 0:
+			go_to = self.lv.get(self.lv.curselection())
+		else:
+			go_to = self.entry_directory.get()
 
 		# Go to the self.entry_directory.
-		self.GoTo(self.entry_directory.get(), True)
+		self.GoTo(go_to, True)
 
 		# Update the entry directory (add \ to the end and generate keyrelease).
-		self.entry_directory.delete(0, tk.END)
-		self.entry_directory.insert(0, '{}\\'.format(self.lv.get(self.lv.curselection())))
+		if not self.current_directory.endswith('\\'):
+			self.entry_directory.delete(0, tk.END)
+			self.entry_directory.insert(0, '{}\\'.format(self.current_directory))
 
-		#self.DetroyLV()
-		self.entry_directory.event_generate('<KeyRelease>')
+		self.KeyRelease(None) #self.entry_directory.event_generate('<KeyRelease>')
+
+		self.entry_directory.focus_set()
 
 	def FoucusOut(self, event=None):
 		'''
@@ -4352,9 +4391,8 @@ class Explorer(Frame):
 		'''
 
 		# Check if we focus out the entry and the top level or some of his elements.
-		if hasattr(self, 'tw') and not self.focus_get() in [self.tw, self.my_frame, self.lv, self.scrollbar]:
+		if self.tw and not self.focus_get() in [self.last_tw, self.tw, self.my_frame, self.lv, self.scrollbar] and not self.entry_directory.focus_get().__class__ == ttk.Entry:
 			self.DetroyLV()
-			
 
 	def DetroyLV(self, event=None):
 		'''
@@ -4364,26 +4402,15 @@ class Explorer(Frame):
 		'''
 
 		# Do this only if the top exist.
-		if hasattr(self, 'tw'):
+		if self.tw and self.tw:
 			self.tw.destroy()
+			self.tw = None
+			#del self.tw
 			self.c_selection = 0
 			#self.entry_directory.bind('<Return>', lambda e: 'break')
-			self.entry_directory.bind("<Return>", self.Enter)
+			self.entry_directory.bind("<Return>", self.LVEnter)
 			self.entry_directory.bind('<Up>', lambda e: 'break')
 			self.entry_directory.bind('<Down>', lambda e: 'break')
-
-	def Enter(self, event=None):
-		'''
-		Go to the self.entry_directory path.
-		:param event: None
-		:return: None
-		'''
-
-		# Put the current directory on the go back list
-		self.directory_queue.append(self.current_directory)
-
-		# Go to the self.entry_directory
-		self.GoTo(self.entry_directory.get(), True)
 
 	def OnDoubleClick(self, event):
 		'''
@@ -4419,10 +4446,11 @@ class Explorer(Frame):
 		self.directory_queue.append(self.current_directory)
 
 		# Change the current directory
-		self.current_directory += "\{}".format(clicked_file)
-		self.entry_directory.delete(0, tk.END)
-		self.entry_directory.insert(0, self.current_directory)
-		
+		if self.current_directory.endswith('\\'):
+			self.current_directory += clicked_file
+		else:
+			self.current_directory += "\{}".format(clicked_file)
+
 		# Get the selected item from the database dictionary.
 		path = self.current_directory
 		db_pointer = self.GetDBPointer(path)
@@ -4451,7 +4479,6 @@ class Explorer(Frame):
 					self.tree.tree.item(i, tags="tag_directory")
 					self.tree.visual_drag.item(i, tags="tag_directory")
 
-
 	def UnGo(self, event=None):
 		'''
 		This function is undo fore goback.
@@ -4467,7 +4494,6 @@ class Explorer(Frame):
 
 			# Go to the last directory.
 			prev_dir = self.directory_requeue.pop()
-			self.directory_queue.append(self.current_directory)
 			self.GoTo(prev_dir, True)
 
 	def GoBack(self, event=None):
@@ -4485,30 +4511,34 @@ class Explorer(Frame):
 
 			# Go to the last directory.
 			last_dir = self.directory_queue.pop()
-			self.directory_requeue.append(self.current_directory)
-			self.GoTo(last_dir, True)
+			self.GoTo(last_dir, True, False)
 
-	def GoTo(self, go_to, not_case_sensitive=False):
+	def GoTo(self, go_to, not_case_sensitive=False, go_back=True):
 		'''
 		This function go to a spesific specified path
 		:param goto: path to go (string)
 		:param not_case_sensitive: if to check not as case sensetive.
+		:param go_back: are we go back or forward.
 		:return: None
 		'''
+
+		# Add to the right queue (go back or forward).
+		if go_back:
+			self.directory_queue.append(self.current_directory)
+		else:
+			self.directory_requeue.append(self.current_directory)
+
+		# Get the selected item from the database dictionary.
+		db_pointer = self.GetDBPointer(go_to, not_case_sensitive)
+
+		# If the user dont want to go to the location (because the location doesn't exist in the dump).
+		if not db_pointer:
+			return
 
 		# Delete current displayed data from the treeview.
 		for i in self.tree.tree.get_children():
 			self.tree.tree.delete(i)
 			self.tree.visual_drag.delete(i)
-
-		# Get the last directory (pop it from the directory_queue list) and set the header button.
-		self.current_directory = go_to
-		self.entry_directory.delete(0, tk.END)
-		self.entry_directory.insert(0, self.current_directory)
-		path = self.current_directory
-
-		# Get the selected item from the database dictionary.
-		db_pointer = self.GetDBPointer(path)
 
 		# Get all the data
 		data, directories = self.GetDataAndDirectories(db_pointer)
@@ -4521,14 +4551,148 @@ class Explorer(Frame):
 				self.tree.tree.item(i, tags="tag_directory")
 				self.tree.visual_drag.item(i, tags="tag_directory")
 
-class FileExplorer(Explorer):
+	def GoToFile(self, file_path, not_case_sensitive):
+		'''
+		Go to the directory and select the file.
+		:param file_path: the file path
+		:param not_case_sensitive: not case sensitive
+		:return: None
+		'''
+
+		# Go to the directory.
+		go_to = file_path[:file_path.rfind('\\')+1]
+		self.GoTo(go_to, not_case_sensitive)
+
+		# Go all over the items and select the right one.
+		file_name = file_path[file_path.rfind('\\')+1:]
+		for ht_row in self.tree.tree.get_children():
+			if str(self.tree.tree.item(ht_row)['values'][0]).lower() == str(file_name).lower():
+				self.tree.tree.focus(ht_row)
+				self.tree.tree.selection_set(ht_row)
+				queue.put((self.tree.tree.see, (ht_row,)))
+		
+class FileExplorer(Frame):
 	'''
 	Explorer with file specific function like dump file.
 	'''
 	def __init__(self, master, dict, headers,  view_hex, searchTitle, resize=True, path=None, relate=None,  *args, **kwargs):
-		Explorer.__init__(self, master, dict, headers, view_hex, searchTitle, resize, path, relate, *args, **kwargs)
-		self.tree.aMenu.add_command(label='HexDump', command=self.HexDump)
-		self.tree.aMenu.add_command(label='Dump', command=self.Dump)
+		Frame.__init__(self, master, *args, **kwargs)
+
+		self.pw = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+		self.exp_frame = Explorer(self.pw, dict[' '], headers, view_hex, searchTitle, resize, path, relate, *args, **kwargs)
+		self.tree = self.exp_frame.tree
+		self.exp_frame.tree.aMenu.add_command(label='HexDump', command=self.HexDump)
+		self.exp_frame.tree.aMenu.add_command(label='Dump', command=self.Dump)
+
+
+		#info_frame = ttk.Frame(self.pw)
+		tabcontroller = NoteBook(self.pw)
+
+		# Check if there is any data in the dict.
+		if dict['?userassist?'] != []:
+			ua_frame = Frame(tabcontroller)
+			headers = ('Registry', 'Path', 'Last Write', 'Subkey', 'Value (file path)', 'ID', 'Count', 'Focus Count', 'Time Focused', 'Last Updated')
+			display_headers = ('Value (file path)', 'ID', 'Count', 'Focus Count', 'Last Write')
+			ua_frame.tree = TreeTree(ua_frame, headers=headers, data=dict['?userassist?'], text_by_item=4, resize=False, display=display_headers)
+			ua_frame.tree.aMenu.add_command(label='Jump To Location', command=lambda: self.resolve_path_and_go_to(ua_frame.tree.main_t))
+			ua_frame.tree.pack(expand=YES, fill=BOTH)
+			tabcontroller.add(ua_frame, text='User Assist')
+
+		# Check if there is any data in the dict.
+		if dict['?shimcache?'] != []:
+			sc_frame = Frame(tabcontroller)
+			headers = ('Last Modified', 'Last Update', 'Path (file path)')
+			display_headers = ('Path (file path)', 'Last Modified')
+			sc_frame.tree = TreeTree(sc_frame, headers=headers, data=dict['?shimcache?'], text_by_item=2, resize=False, display=display_headers)
+			sc_frame.tree.aMenu.add_command(label='Jump To Location', command=lambda: self.resolve_path_and_go_to(sc_frame.tree.main_t))
+			sc_frame.tree.pack(expand=YES, fill=BOTH)
+			tabcontroller.add(sc_frame, text='Shim Cache')
+
+		# Check if there is any data in the dict.
+		if dict['?amcache?'] != []:
+			amc_frame = Frame(tabcontroller)
+			headers = ('Registry', 'Key Path', 'Last Write', 'Value Name', 'Description', 'Value (file path)')
+			display_headers = ('Value (file path)', 'Last Write')
+			amc_frame.tree = TreeTree(amc_frame, headers=headers, data=dict['?amcache?'], text_by_item=6, resize=False, display=display_headers)
+			amc_frame.tree.aMenu.add_command(label='Jump To Location', command=lambda: self.resolve_path_and_go_to(amc_frame.tree.main_t))
+			amc_frame.tree.pack(expand=YES, fill=BOTH)
+			tabcontroller.add(amc_frame, text='Am Cache')
+
+		# Check if there is any shimcachemem in the dict.
+		if dict['?shimcachemem?'] != []:
+			scm_frame = Frame(tabcontroller)
+			headers = ('Order', 'Last Modified', 'Last Update', 'Exec Flag', 'File Size', 'File Path')
+			display_headers = ('File Path', 'Last Modified')
+			scm_frame.tree = TreeTree(scm_frame, headers=headers, data=dict['?shimcachemem?'], text_by_item=5, resize=False, display=display_headers)
+			scm_frame.tree.aMenu.add_command(label='Jump To Location', command=lambda: self.resolve_path_and_go_to(scm_frame.tree.main_t))
+			scm_frame.tree.pack(expand=YES, fill=BOTH)
+			tabcontroller.add(scm_frame, text='Shim Cache Mem')
+
+		tabcontroller.enable_traversal()
+		tabcontroller.pack(fill=BOTH, expand=1)
+
+
+		self.pw.add(tabcontroller)
+		self.pw.add(self.exp_frame)
+		self.pw.pack(fill=BOTH, expand=YES)
+
+	def resolve_path_and_go_to(self, tree):
+		'''
+		Resolve environment, symlink and go to the file specified.
+		:param path:
+		:return:
+		'''
+
+		item = tree.tree.selection()[0]
+		path = tree.tree.item(item)['values'][tree.text_by_item].replace('UEME_RUNPIDL:', '').replace('UEME_RUNPATH:', '').lower()
+
+		# "System" Envars (checked from csrss, wininit and exporer, on this order).
+		for c_pid in process_bases:
+			if process_bases[int(c_pid)]["dlls"].has_key('csrss.exe'):
+				if process_env_var.has_key(int(c_pid)):
+					for env in process_env_var[int(c_pid)]:
+						path = path.replace('%{}%'.format(env.lower()), process_env_var[int(c_pid)][env])
+
+		for c_pid in process_bases:
+			if process_bases[int(c_pid)]["dlls"].has_key('wininit.exe'):
+				if process_env_var.has_key(int(c_pid)):
+					for env in process_env_var[int(c_pid)]:
+						path = path.replace('%{}%'.format(env.lower()), process_env_var[int(c_pid)][env])
+
+		for c_pid in process_bases:
+			if 'explorer.exe' in [c_exp.lower() for c_exp in process_bases[int(c_pid)]["dlls"].keys()]:
+				if process_env_var.has_key(int(c_pid)):
+					for env in process_env_var[int(c_pid)]:
+						path = path.replace('%{}%'.format(env.lower()), process_env_var[int(c_pid)][env])
+
+		if path.startswith('\\') or path.startswith('/'):
+			path = path[1:]
+		path = path.replace('/', '\\')
+		if '\\' in path:
+			path = path.replace('\\\\', '\\')
+			if path.startswith('??'):
+				path = path[3:]
+			path_split = path.split('\\')
+		else:
+			# Remove the /??/ on the starts of some path
+			if path.startswith('/??/'):
+				path = path[4:]
+			path_split = path.split('/')
+
+		drive = path_split[0].upper()
+
+		# Validate drive
+		if winobj_dict == {}:
+			messagebox.showerror('Error', 'Need winobj data to resolve this path,\nPlease try again later when you have winobj data.\nOr go to this path.'.format(drive), parent=self)
+			return
+		elif not winobj_dict['/']['GLOBAL??'].has_key(drive):
+			messagebox.showerror('Error', 'Invalid Drive: {}'.format(drive), parent=self)
+			return
+		device = winobj_dict['/']['GLOBAL??'][drive]['|properties|'][-2].replace('Target: ', '')
+		path_split = [device] + path_split[1:]
+		change_path = "\\".join(path_split)
+		
+		self.exp_frame.GoToFile(change_path, True)
 
 	def dump_directory(self, clicked_file, recursive=True):
 		'''
@@ -4537,9 +4701,9 @@ class FileExplorer(Explorer):
 		:param values: dir values
 		:return: None
 		'''
-		current_directory = "{}\{}".format(self.current_directory, clicked_file)
+		current_directory = "{}\{}".format(self.exp_frame.current_directory, clicked_file)
 		path_list = current_directory.split("\\")
-		pMftExp = self.dict
+		pMftExp = self.exp_frame.dict
 		for key in path_list:
 			if pMftExp.has_key(key):
 				pMftExp = pMftExp[key]
@@ -4637,14 +4801,14 @@ class FileExplorer(Explorer):
 		'''
 
 		# Get the arguments for the function
-		item = self.tree.tree.selection()[0]
-		clicked_file = self.tree.tree.item(item, "text")
+		item = self.exp_frame.tree.tree.selection()[0]
+		clicked_file = self.exp_frame.tree.tree.item(item, "text")
 
 		# Check if this is directory or a file.
-		if 'tag_directory' in self.tree.tree.item(item, "tags"):
+		if 'tag_directory' in self.exp_frame.tree.tree.item(item, "tags"):
 			self.dump_directory(clicked_file, True)
 		else:
-			values = self.tree.tree.item(item)["values"]
+			values = self.exp_frame.tree.tree.item(item)["values"]
 			threading.Thread(target=self.DumpThread, args=(values,)).start()
 			time.sleep(1)
 
@@ -4669,16 +4833,16 @@ class FileExplorer(Explorer):
 		This function validate that the selected item is a file and call the hexdump function.
 		:return:
 		'''
-		item = self.tree.tree.selection()[0]
+		item = self.exp_frame.tree.tree.selection()[0]
 
 		# Validate that the selected item is a file and not directory, if this is directory, return.
-		if 'tag_directory' in self.tree.tree.item(item, "tags"):
+		if 'tag_directory' in self.exp_frame.tree.tree.item(item, "tags"):
 			messagebox.showerror("Error", "Unable to dump a Directory", parent=self)
 			return
 
 		# Start the HexDumpThread function.
-		clicked_file = self.tree.tree.item(item, "text")
-		values = self.tree.tree.item(item)["values"]
+		clicked_file = self.exp_frame.tree.tree.item(item, "text")
+		values = self.exp_frame.tree.tree.item(item)["values"]
 		threading.Thread(target=self.HexDumpThread, args=(clicked_file, values)).start()
 		time.sleep(1)
 
@@ -4715,7 +4879,7 @@ class FileExplorer(Explorer):
 
 class ExpSearch(tk.Toplevel):
 	'''
-	Search for explorer class
+	Search for explorer class, handle explorer ctrl+f
 	'''
 	def __init__(self, headers=('Path', 'Name', 'Value'), dict=None, dict_headers=None, controller=None, *args, **kwargs):#(path,name,value)
 		tk.Toplevel.__init__(self, *args, **kwargs)
@@ -4728,16 +4892,13 @@ class ExpSearch(tk.Toplevel):
 		self.search_text = tk.Entry(self)
 		self.search_text.insert(10, 'Search text here')
 		self.search_text.bind("<Return>", self.enter_search)
-		self.search_text.pack()#fill='x')
+		self.search_text.pack()
 		self.select_box = Combobox(self, state="readonly", values=self.dict_headers)
-		#self.select_box.bind("<<ComboboxSelected>>", self.TextBoxUpdate)
 		self.select_box.current(0)
 		self.select_box.pack()
 		self.search_button = tk.Button(self, text="<- Search ->", command=self.search)
-		self.search_button.pack(fill='x')  # side=tk.LEFT)
-		data = []
-		self.tree = TreeTable(self, headers=headers, data=data, text_by_item=1, resize=True)
-		self.tree.tree['height'] = 22 if 22 < len(data) else len(data)
+		self.search_button.pack(fill='x')
+		self.tree = TreeTable(self, headers=headers, data=[], text_by_item=1, resize=True)
 		self.tree.pack(expand=YES, fill=BOTH)
 		self.tree.tree.bind("<Return>", self.OnDoubleClick)
 		self.tree.tree.bind("<Double-1>", self.OnDoubleClick)
@@ -4843,7 +5004,7 @@ class StructExplorer(Explorer):
 		row = self.tree.tree.selection()[0]
 		item = self.tree.tree.item(row)
 		item_text = item['values'][wt]
-		new_val = tkSimpleDialog.askstring(title="Change {}".format(item['values'][0]), prompt="Notice\nThere is no back option after you change this value\n(the data type will adjust to the current field)\nCurrent: {}\nNew:".format(item_text))
+		new_val = tkSimpleDialog.askstring(title="Change {}".format(item['values'][0]), prompt="Notice\nThere is no back option after you change this value\n(the data type will adjust to the current field)\nCurrent: {}\nNew:".format(item_text), parent=self)
 
 		# The user cancel.
 		if not new_val:
@@ -6005,7 +6166,7 @@ class CmdPlugin(tk.Toplevel):
 	def apply(self, event):
 		global plugins_output
 
-		apply_header = tkSimpleDialog.askstring(title="Apply Header", prompt="Please enter the tab name for this appliance:")
+		apply_header = tkSimpleDialog.askstring(title="Apply Header", prompt="Please enter the tab name for this appliance:", parent=self)
 
 		# Check if the user cancel.
 		if not apply_header:
@@ -6120,6 +6281,7 @@ class About(tk.Toplevel):
 		ttk.Label(image_frame, image=img).pack()
 		ttk.Label(about_frame, text="Volatility Explorer\nCreator: Aviel Zohar\nContact: memoryforensicsanalysis@gmail.com", compound=tk.CENTER).pack(side=TOP)
 		git_link = ttk.Label(about_frame, text="Go To Github", foreground='blue', compound=tk.CENTER)
+		ToolTip(git_link, r"https://github.com/memoryforensics1/VolExp")
 		git_link.bind("<Button-1>", lambda e: open_new(r"https://github.com/memoryforensics1/VolExp"))
 		git_link.pack(side=TOP)
 		ttk.Label(about_frame, text=CREDITS, compound=tk.CENTER).pack(side=BOTTOM)
@@ -6301,14 +6463,12 @@ class MoveLists(tk.Toplevel):
 	def move_table(self, event=None):
 		for select in self.tree1.curselection():
 			item_text = self.tree1.get(select)
-			print item_text
 			self.tree2.insert(END, item_text)
 		for select in self.tree1.curselection()[::-1]:
 			self.tree1.delete(select)
 
 		for select in self.tree2.curselection():
 			item_text = self.tree2.get(select)
-			print item_text
 			self.tree1.insert(END, item_text)
 		for select in self.tree2.curselection()[::-1]:
 			self.tree2.delete(select)
@@ -7017,7 +7177,8 @@ class TreeLable(TreeTable):
 		self.pack(expand=YES, fill=BOTH)
 
 		self.opts = {}
-		frame = ttk.Frame(master)
+		self.frame = frame = ttk.Frame(master)
+
 		self.frames = []
 		counter = 0
 		col_size = 4
@@ -7026,7 +7187,7 @@ class TreeLable(TreeTable):
 				papa = ttk.Frame(frame)
 				self.frames.append((ttk.Frame(papa), ttk.Frame(papa), papa))
 
-			ttk.Label(self.frames[counter/col_size][0], text='\t{} : '.format(item), wraplength=500).pack(anchor='w')
+			ttk.Label(self.frames[counter/col_size][0], text='{} : '.format(item), wraplength=500).pack(anchor='w', padx=10)
 			self.opts[item] = StringVar()
 			self.opts[item].set('-')
 			ttk.Label(self.frames[counter/col_size][1], textvariable=self.opts[item]).pack(anchor='w')
@@ -7065,11 +7226,12 @@ class TreeTree(Frame):
 		self.master = master
 		self.pw = PanedWindow(self, orient='vertical')
 		self.main_t = main_t = TreeTable(self.pw, headers,  data, name, text_by_item, resize, display, progressbar, *args, **kwargs)
+		self.aMenu = self.main_t.aMenu
 		main_t.tree['height'] = main_t.tree['height'] = 10 if len(data) > 10 else len(data)
 		main_t.pack(expand=YES, fill=BOTH)
 
 		self.opts = {}
-		self.mem_view = mem_view = TreeTable(self.pw, ("Members", "Values"), [], name, text_by_item, resize, ("Members", "Values"), progressbar, *args, **kwargs)
+		self.mem_view = mem_view = TreeTable(self.pw, ("Members", "Values"), [], name, 0, resize, ("Members", "Values"), progressbar, *args, **kwargs)
 		for item in headers:
 			self.opts[item] = StringVar()
 			self.opts[item].set('-')
@@ -9554,7 +9716,7 @@ class VolExp(common.AbstractWindowsCommand):
 				self.get_imports(task, task_pid)
 				#threading.Thread(target=self.impscan_func, args=(self._config.PID,)).start()
 			else:
-				print '[-] loaded import from ', task_pid
+				print '[+] loaded import from ', task_pid
 		job_queue.put_alert((id, 'VolExp Search Process Environment Variables ', 'Get all process environment variable', 'Done'))
 		done_run['process_imports'] = process_imports
 		print "[+] Done Get Imports"
@@ -9720,16 +9882,19 @@ class VolExp(common.AbstractWindowsCommand):
 		global done_run
 		global lock
 
+		# Create a temp file name to dump the information
+		file_name = os.path.join(self._config.DUMP_DIR, 'mft_parser{}'.format(time.time()))
+
 		# Get the command line according to if its memtriage or volatility
 		if self.is_memtriage:
-			command_line = r'"{}" "{}" --plugins=mftparsergui -M yes'.format(sys.executable, self._vol_path)
+			command_line = r'"{}" "{}" --plugins=mftparsergui -M {}'.format(sys.executable, self._vol_path, file_name)
 		else:
 
 			# Get the file path and profile
 			with lock:
 				file_path = urllib.url2pathname(volself._config.location[7:])
 				profile = self._config.PROFILE
-			command_line = r'"{}" "{}" -f "{}" --profile={} mftparsergui -M yes'.format(sys.executable, self._vol_path, file_path, profile)
+			command_line = r'"{}" "{}" -f "{}" --profile={} mftparsergui -M {}'.format(sys.executable, self._vol_path, file_path, profile, file_name)
 
 		# Add to job queue
 		id = time.time()
@@ -9749,12 +9914,11 @@ class VolExp(common.AbstractWindowsCommand):
 				print
 				"[-] Volatility don't fully support this version (mft parser failed)"
 				return
-		
-		# Parses the info with the S4@7t
-		info = proc[proc.index("S4@7t ")+len("S4@7t "):proc.rfind('}')+1]
 
 		# Parse the data to mft_explorer
-		mft_explorer = ast.literal_eval(info)
+		with open(file_name, 'rb') as mft_info_data:
+			mft_explorer = pickle.load(mft_info_data)
+		os.remove(file_name)
 
 		# Change the menu colore to default
 		def change_menu_color():
@@ -9777,16 +9941,19 @@ class VolExp(common.AbstractWindowsCommand):
 		global done_run
 		global lock
 
+		# Create a temp file name to dump the information
+		file_name = os.path.join(self._config.DUMP_DIR, 'file_scan{}'.format(time.time()))
+
 		# Get the command line according to if its memtriage or volatility
 		if self.is_memtriage:
-			command_line = r'"{}" "{}" --plugins=filescangui -M yes'.format(sys.executable, self._vol_path)
+			command_line = r'"{}" "{}" --plugins=filescangui -M {}'.format(sys.executable, self._vol_path, file_name)
 		else:
 
 			# Get the file path and profile
 			with lock:
 				file_path = urllib.url2pathname(volself._config.location[7:])
 				profile = self._config.PROFILE
-			command_line = r'"{}" "{}" -f "{}" --profile={} filescangui -M yes'.format(sys.executable, self._vol_path, file_path, profile)
+			command_line = r'"{}" "{}" -f "{}" --profile={} filescangui -M {}'.format(sys.executable, self._vol_path, file_path, profile, file_name)
 
 		# Add to job queue
 		id = time.time()
@@ -9806,11 +9973,10 @@ class VolExp(common.AbstractWindowsCommand):
 				"[-] Volatility don't fully support this version file scan failed"
 				return
 
-		# Parses the info with the S4@7t
-		info = proc[proc.index("S4@7t ")+len("S4@7t "):proc.rfind('}')+1]
-
-		# Parse the data to mft_explorer
-		files_scan = ast.literal_eval(info)
+		# Parse the data to files_scan
+		with open(file_name, 'rb') as file_info_data:
+			files_scan = pickle.load(file_info_data)
+		os.remove(file_name)
 
 		# Change the menu colore to default
 		def change_menu_color():
@@ -9833,16 +9999,51 @@ class VolExp(common.AbstractWindowsCommand):
 		global done_run
 		global lock
 
+		# Fix winobj win10 data if the user want to.
+		if (self.kaddr_space.profile.metadata.get("major"), self.kaddr_space.profile.metadata.get("minor")) == (6, 4) and not self.kaddr_space.profile.has_type('_SECTION_OBJECT'):
+
+			winobj_plugin_file_path = os.path.join(all_plugins[0], 'winobj.py')
+			with open(winobj_plugin_file_path, 'rb') as winobj_plugin_file:
+				winobj_plugin_code = winobj_plugin_file.read()
+
+			def fix_win_obj(winobj_plugin_code):
+				ans = messagebox.askyesnocancel("Notice",
+												"winobj plugin have some problem in windows 10 do you want volexp to fix this plugin (by override the problem funcion)\nIf you choose no the we will be unnable to get the kernel objects data")
+				# return if the user dont want to fix winobj
+				if not ans:
+					self.winobj_lock.release()
+					return
+
+				# Fix winobj code
+				# New version of windows 10 does not have _SECTION_OBJECT object
+				winobj_plugin_code = winobj_plugin_code.replace('elif obj_type == "Section":', 'elif obj_type == "Section" and addr_space.profile.has_type("_SECTION_OBJECT"):')
+
+				with open(winobj_plugin_file_path, 'wb') as winobj_plugin_file:
+					winobj_plugin_file.write(winobj_plugin_code)
+
+				reload(winobj)
+				self.winobj_lock.release()
+
+			# Check if winobj is not fixed already
+			if not 'elif obj_type == "Section" and addr_space.profile.has_type("_SECTION_OBJECT"):' in winobj_plugin_code:
+				self.winobj_lock = threading.Lock()
+				self.winobj_lock.acquire()
+				queue.put((fix_win_obj, (winobj_plugin_code, )))
+				self.winobj_lock.acquire()
+
+		# Create a temp file name to dump the information
+		file_name = os.path.join(self._config.DUMP_DIR, 'winobj_data{}'.format(time.time()))
+
 		# Get the command line according to if its memtriage or volatility
 		if self.is_memtriage:
-			command_line = r'"{}" "{}" --plugins=winobjgui -M yes'.format(sys.executable, self._vol_path)
+			command_line = r'"{}" "{}" --plugins=winobjgui -M {}'.format(sys.executable, self._vol_path, file_name)
 		else:
 
 			# Get the file path and profile
 			with lock:
 				file_path = urllib.url2pathname(volself._config.location[7:])
 				profile = self._config.PROFILE
-			command_line = r'"{}" "{}" -f "{}" --profile={} winobjgui -M yes'.format(sys.executable, self._vol_path, file_path, profile)
+			command_line = r'"{}" "{}" -f "{}" --profile={} winobjgui -M {}'.format(sys.executable, self._vol_path, file_path, profile, file_name)
 
 		# Add to job queue
 		id = time.time()
@@ -9851,27 +10052,21 @@ class VolExp(common.AbstractWindowsCommand):
 		# Try to run this command (some profile my not support scanning so alert the user if we failed)
 		try:
 			proc = subprocess.check_output(command_line)
-
-			# Parses the info with the S4@7t
-			info = proc[proc.index("S4@7t ") + len("S4@7t "):-2]
 		except:
 			try:
 				proc = subprocess.Popen([command_line],
 										shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
 										stderr=subprocess.PIPE)
 				proc = proc.communicate()[0]
-
-				# Parses the info with the S4@7t
-				info = proc[proc.index("S4@7t ") + len("S4@7t "):proc.rfind('}') + 1]
 			except:
 				print
 				"[-] Volatility don't fully support this version (WinObj failed)"
 				return
 
-
-		
-		# Parse the data to mft_explorer
-		winobj_dict = ast.literal_eval(info)
+		# Parse the data to winobj_dict
+		with open(file_name, 'rb') as obj_info_data:
+			winobj_dict = pickle.load(obj_info_data)
+		os.remove(file_name)
 
 		# Change the menu colore to default
 		def change_menu_color():
@@ -10339,7 +10534,7 @@ class VolExp(common.AbstractWindowsCommand):
 			app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 			FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"), view_hex=True, searchTitle='Search For Files', relate=app).pack(fill=BOTH, expand=YES)
 			app.title("Files Explorer")
-			app.geometry("700x450")
+			app.geometry("1400x650")
 
 	def s_control_e(self, event):
 		'''
@@ -10693,7 +10888,7 @@ class VolExp(common.AbstractWindowsCommand):
 								if first_sid_name:
 									first_sid_name = False
 									un = sid_name
-									
+
 								sid_count += 1
 
 						# Set  the user name if we didnt find it yet (if this still Searching...)
@@ -10756,6 +10951,9 @@ class VolExp(common.AbstractWindowsCommand):
 		# Send a message to the user that the gui will stop working for couple of seconds
 		queue.put((messagebox.showinfo, ("Please Wait!", "The GUI will be unavailable for a couple of seconds..\nUpdating all files and user information in the main table (you can view them using select column [ctrl+c])\nNow we will start creating the Registry Explorer(view using view - > Registry Explorer the items will update at runtime)")))
 
+		# display a messagepopup to the user that the gui will stop working for couple of seconds
+		queue.put((MessagePopUp, ('The GUI will be unavailable for a couple of seconds..\nUpdating all files and user information in the main table (you can view them using select column [ctrl+c])\nNow we will start creating the Registry Explorer(view using view - > Registry Explorer the items will update at runtime)',5 , root, "Please Wait!")))
+
 		# Call the update function (will stop the gui for a cuple of seconds).
 		queue.put((main_table_update, (user_sids,)))
 
@@ -10763,7 +10961,10 @@ class VolExp(common.AbstractWindowsCommand):
 		t8 = threading.Thread(target=self.registry_keys, name='registry_keys')
 		t8.daemon = True
 		self.threads.append(t8)
-		t8.start()
+
+		# Wait for update table all to finish before start.
+		with lock:
+			t8.start()
 
 	def disassemble(self, proc_addr_space, address, size=128):
 		'''
@@ -10808,6 +11009,8 @@ class VolExp(common.AbstractWindowsCommand):
 		"""
 		# If not canceled.
 		if location != '':
+			MessagePopUp(
+				'Saving your data to a file\nIt will take a couple of seconds\nA message will display when it\'s over', 5, root)
 			threading.Thread(target=self.save_thread, args=(location,)).start()
 
 	def save_thread(self, location_path=None):
@@ -10847,6 +11050,7 @@ class VolExp(common.AbstractWindowsCommand):
 		saved_data['pfn_stuff'] = pfn_stuff
 		saved_data['pe_comments'] = pe_comments
 
+		# Dump the data to a file.
 		with open(file_name, 'wb') as handle:
 			pickle.dump(saved_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 		print '[+] Done create saved file:{}'.format(file_name)
@@ -10860,6 +11064,7 @@ class VolExp(common.AbstractWindowsCommand):
 		"""
 		global files_info, process_dlls, process_handles, process_bases, process_threads, process_connections, process_imports, process_env_var, process_security, process_performance, process_comments, tree_view_data, pfn_stuff, mft_explorer, files_scan, winobj_dict, reg_dict, service_dict, all_plugins, process_tree_data, pfn_stuff, pe_comments, user_sids
 		global location, dump_dir, profile, api_key, vol_path, save_file_name
+		global done_run
 
 		# Open the saved file
 		with open(file_path, 'rb') as handle:
@@ -10878,24 +11083,10 @@ class VolExp(common.AbstractWindowsCommand):
 
 		print '[+] loaded:', location, dump_dir, profile, api_key, vol_path
 
-		# Go all over the saved data and insert them to the globals()
+		# Go all over the saved data and insert them to the globals() and done_run
 		globals().update(saved_data)
-		'''
-		for dict_name in saved_data:
-			if saved_data[dict_name]:
-				if type(saved_data[dict_name]) == list:
-					globals()[dict_name] = done_run[dict_name] = list(saved_data[dict_name])
-				elif type(saved_data[dict_name]) == dict:
-					globals()[dict_name] = done_run[dict_name] = dict(saved_data[dict_name])
-				elif type(saved_data[dict_name]) == str:
-					globals()[dict_name] = done_run[dict_name] = str(saved_data[dict_name])
-				else:
-					print 'unknow type:', type(saved_data[dict_name]), dict_name
-				if dict_name in globals():
-					print 'loaded:', dict_name, len(globals()[dict_name])
-				else:
-					print dict_name, 'not in globals()'
-		'''
+		done_run.update(saved_data)
+
 		# Yield all the process data
 		for task_data in process_tree_data:
 			process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc = task_data
@@ -11080,7 +11271,7 @@ class VolExp(common.AbstractWindowsCommand):
 			token_virtualized = ""
 			token_protected = ""
 			process_token[int(pid)] = (
-			proc_token.v(), token_user, token_session, token_session_id, token_elevated, token_virtualized,
+			str(proc_token.v()), token_user, token_session, token_session_id, token_elevated, token_virtualized,
 			token_protected)
 			#
 
@@ -11585,7 +11776,7 @@ class VolExp(common.AbstractWindowsCommand):
 			token_elevated = ""
 			token_virtualized = ""
 			token_protected = ""
-			process_token[int(pid)] = (proc_token.v(), token_user, token_session, token_session_id, token_elevated, token_virtualized, token_protected)
+			process_token[int(pid)] = (str(proc_token.v()), token_user, token_session, token_session_id, token_elevated, token_virtualized, token_protected)
 			#
 
 			integrity = int(get_right_member(proc_token, ["IntegrityLevelIndex"]) or -1)
@@ -11906,20 +12097,15 @@ class VolExp(common.AbstractWindowsCommand):
 		process_menu_bar.add_command(label="Properties in new tab", command=lambda: self.properties(0))
 		process_menu_bar.add_command(label="Properties in main tab", command=lambda: self.s_properties(0))
 		subview_menu_bar.add_command(label="Registry Explorer", command=lambda: self.s_control_r(0))
-		subview_menu_bar.entryconfig(0, background='red')
 		subview_menu_bar.add_command(label="MFT Explorer", command=lambda: self.s_control_m(0))
-		subview_menu_bar.entryconfig(1, background='red')
 		subview_menu_bar.add_command(label="File Explorer", command=lambda: self.s_control_e(0))
-		subview_menu_bar.entryconfig(2, background='red')
 		subview_menu_bar.add_command(label="WinObj Explorer", command=lambda: self.s_control_w(0))
-		subview_menu_bar.entryconfig(3, background='red')
 		subview_menu_bar.add_separator()
 		subview_menu_bar.add_command(label="Process", command=lambda: self.s_control_t(0))
 		subview_menu_bar.add_command(label="Modules", command=lambda: self.s_control_d(0))
 		subview_menu_bar.add_command(label="Network", command=lambda: self.s_control_n(0))
-		subview_menu_bar.entryconfig(7, background='red')
 		subview_menu_bar.add_command(label="Services", command=lambda: self.s_control_s(0))
-		subview_menu_bar.entryconfig(8, background='red')
+
 		subview_menu_bar.add_separator()
 		# subview_menu_bar.add_command(label="System Information", command=lambda: self.s_control_i(0)) # To Add
 		# subview_menu_bar.entryconfig(9, background='red')
@@ -11928,16 +12114,11 @@ class VolExp(common.AbstractWindowsCommand):
 		view_menu_bar.add_cascade(label="Open Sub View", menu=subview_menu_bar)
 		view_menu_bar.add_separator()
 		view_menu_bar.add_command(label="Registry Explorer (Ctrl+r)", command=lambda: self.control_r(0))
-		view_menu_bar.entryconfig(2, background='red')
 		view_menu_bar.add_command(label="MFT Explorer (Ctrl+m)", command=lambda: self.control_m(0))
-		view_menu_bar.entryconfig(3, background='red')
 		view_menu_bar.add_command(label="File Explorer (Ctrl+e)", command=lambda: self.control_e(0))
-		view_menu_bar.entryconfig(4, background='red')
 		view_menu_bar.add_command(label="WinObj Explorer (Ctrl+w)", command=lambda: self.control_w(0))
-		view_menu_bar.entryconfig(5, background='red')
 		view_menu_bar.add_command(label="Process Tree (Ctrl+t)", command=lambda: self.control_t(0))
 		view_menu_bar.add_command(label="Services (Ctrl+s)", command=lambda: self.control_s(0))
-		view_menu_bar.entryconfig(7, background='red')
 		# view_menu_bar.add_command(label="System Information (Ctrl+i)", command=lambda: self.control_i(0)) # To Add
 		# view_menu_bar.entryconfig(8, background='red')
 		view_menu_bar.add_separator()
@@ -12086,9 +12267,9 @@ class VolExp(common.AbstractWindowsCommand):
 		about_button = tk.Button(menuFrame, image=smaller_image, command=self.about, height=15, width=15)
 		about_button.pack(side=tk.LEFT)
 		ToolTip(about_button, 'About')
-		investigation_tip = ttk.Label(menuFrame, text='\tGood Luck And Have Fun In Your Analysis.\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t ')
+		investigation_tip = ttk.Label(menuFrame, text='\tGood Luck And Have Fun In Your Analysis\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t ')
 		ToolTip(investigation_tip, random.choice(TIP_LIST))
-		investigation_tip.pack(side=tk.LEFT)
+		investigation_tip.pack(side=tk.LEFT, fill='x')
 
 
 		menuFrame.pack(anchor="nw")
@@ -12146,8 +12327,11 @@ class VolExp(common.AbstractWindowsCommand):
 		#not process_security.values()[len(process_security) - 1].has_key('Groups')
 		if (len(process_security) == 0 or any(not gnt.has_key('Groups') for gnt in process_security.values()) or any('Searching...' in gn for gnt in process_security.values() for gn in gnt['Groups'])):
 
-			# Get sid conf and start update table all function.
+			# Colored the registry menu.
+			view_menu_bar.entryconfig(2, background='red')
+			subview_menu_bar.entryconfig(0, background='red')
 
+			# Get sid conf and start update table all function.
 			t1 = threading.Thread(target=self.update_table_all, name='update_table_all')
 			t1.daemon = True
 			self.threads.append(t1)
@@ -12161,6 +12345,9 @@ class VolExp(common.AbstractWindowsCommand):
 		# Check if not cached and version > xp
 		if len(process_connections) == 0: # and int(self.kaddr_space.profile.metadata.get('major')) > 5:
 
+			# Colored the connection menu.
+			subview_menu_bar.entryconfig(7, background='red')
+
 			# Start the thread that walk and update this connections to the GUI.
 			t4 = threading.Thread(target=self.update_connections, name='update_connections')
 			t4.daemon = True
@@ -12168,6 +12355,10 @@ class VolExp(common.AbstractWindowsCommand):
 
 		# Check if not chached and we have pycrypto module installed
 		if has_crypto and len(service_dict) == 0:
+
+			# Colored the services menu.
+			view_menu_bar.entryconfig(7, background='red')
+			subview_menu_bar.entryconfig(8, background='red')
 
 			# Start the thread that walk and update this services to the GUI.
 			t3 = threading.Thread(target=self.svc_scan, name='svc_scan')
@@ -12182,6 +12373,10 @@ class VolExp(common.AbstractWindowsCommand):
 		# Check if not chached
 		if len(mft_explorer) == 0:
 
+			# Colored the MFT menu.
+			view_menu_bar.entryconfig(3, background='red')
+			subview_menu_bar.entryconfig(1, background='red')
+
 			# Start the threads that call mftparsergui plugin to get the mft from memory
 			t5 = threading.Thread(target=self.mft_parser, name='mft_parser')
 			t5.daemon = True
@@ -12190,6 +12385,10 @@ class VolExp(common.AbstractWindowsCommand):
 		# Check if not chached
 		if len(files_scan) == 0:
 
+			# Colored the filesscan menu.
+			view_menu_bar.entryconfig(4, background='red')
+			subview_menu_bar.entryconfig(2, background='red')
+
 			# Start the thread that call the filescangui plugin to scan the memory for files
 			t6 = threading.Thread(target=self.file_scan, name='file_scan')
 			t6.daemon = True
@@ -12197,6 +12396,10 @@ class VolExp(common.AbstractWindowsCommand):
 
 		# Check if not chached
 		if len(winobj_dict) == 0:
+
+			# Colored the winobj menu.
+			view_menu_bar.entryconfig(5, background='red')
+			subview_menu_bar.entryconfig(3, background='red')
 
 			# Starts the thread that call the winobjgui plugin to enumerate all the objects in memory
 			t7 = threading.Thread(target=self.win_obj, name='winobj_calc')
@@ -12379,7 +12582,8 @@ class StructAnalyze(common.AbstractWindowsCommand):
 
 			val = eval("struct.{}".format(m))
 			obj_type = eval("struct.{}.obj_type".format(m))
-			c_dict[m] = {'|properties|': (val, val.obj_offset, str(obj_type))} #struct.v() "{}.{}".format(s, m)
+			obj_offset = eval("struct.{}.obj_offset".format(m))
+			c_dict[m] = {'|properties|': (val, obj_offset, str(obj_type))} #struct.v() "{}.{}".format(s, m)
 
 			# check if the members has more members
 			try:
@@ -12405,7 +12609,10 @@ class StructAnalyze(common.AbstractWindowsCommand):
 		:return: None
 		'''
 		struct = obj.Object(self._config.STRUCT, self._config.ADDR, self.kaddr_space)
-		self.parser(struct, 0, 3, self._config.STRUCT, self.struct_dict)
+		try:
+			self.parser(struct, 0, 3, self._config.STRUCT, self.struct_dict)
+		except:
+			raise Exception('[-] unable to parse this object (addr: {}, type: {}), is_valid:{}'.format(self._config.ADDR, self._config.STRUCT, struct.is_valid()))
 
 	def render_text(self, outfd, data):
 		'''
@@ -12575,7 +12782,8 @@ class WinObjGui(common.AbstractWindowsCommand):
 		winobj_calc = winobj.WinObj(self._config)
 		self.win_obj(winobj_calc, winobj_dict)
 		if self._config.GET_DICT != 'no':
-			print "S4@7t", winobj_dict
+			with open(self._config.GET_DICT, 'wb') as my_file:
+				pickle.dump(winobj_dict, my_file)
 			if "--plugins=winobjgui" in sys.argv:
 				sys.exit(1)
 		return
@@ -12660,7 +12868,9 @@ class MftParserGui(common.AbstractWindowsCommand):
 
 							# Create the Dos No Path Folder:
 							if len(path_list) == 1 and '~' in path_list[0]:
-								path_list = ['Dos No Path Folder(Created By The Plugin!)', path_list[0]]
+								path_list = ['Dos No Path Folder(Created By VolExp!)', path_list[0]]
+							elif len(path_list) == 1:
+								path_list = ['No Path Folder(Created By VolExp!)', path_list[0]]
 
 							self.mft_recurse_builder(mft_explorer, path_list, data)
 
@@ -12668,7 +12878,8 @@ class MftParserGui(common.AbstractWindowsCommand):
 		parser = mftparser.MFTParser(self._config).calculate()
 		self.mft_parser(parser)
 		if self._config.GET_DICT != 'no':
-			print "S4@7t", mft_explorer
+			with open(self._config.GET_DICT, 'wb') as my_file:
+				pickle.dump(mft_explorer, my_file)
 			if "--plugins=mftparsergui" in sys.argv:
 				sys.exit(1)
 		return
@@ -12741,17 +12952,63 @@ class FileScanGui(common.AbstractWindowsCommand):
 				self.file_scan_builder(files_scan, path_list, data)
 
 	def calculate(self):
+		global files_scan
 		files = filescan.FileScan(self._config).calculate()
 		self.file_scan(files)
-		from volatility.plugins.registry import userassist
-		self._config.HIVE_OFFSET = None
 
-		#ua = userassist.UserAssist(self._config)
-		#calc = ua.calculate()
-		#user_assist_data = list(ua.generator(calc))
+		files_scan['?shimcachemem?'] = []
+		files_scan['?userassist?']   = []
+		files_scan['?shimcache?']    = []
+		files_scan['?amcache?']      = []
+
+		if (self.kaddr_space.profile.metadata.get("major"), self.kaddr_space.profile.metadata.get("minor")) != (6, 4):
+			# Getting also information about execution program.
+			from volatility.plugins.registry import userassist
+
+			# Getting userassist data.
+			self._config.HIVE_OFFSET = None
+			ua = userassist.UserAssist(self._config)
+			userassist.debug.error = lambda e: sys.stderr.write('[-] The requested key could not be found in the hive(s) searched\n')
+			calc = ua.calculate()
+			userassist_data = [c_data[1] for c_data in ua.generator(calc)]
+			files_scan['?userassist?'] = userassist_data
+
+			# Getting shimcache data.
+			from volatility.plugins.registry import shimcache
+			self._config.HIVE_OFFSET = None
+			sc = shimcache.ShimCache(self._config)
+			calc = sc.calculate()
+			shimcache_data = [c_data[1] for c_data in sc.generator(calc)]
+			files_scan['?shimcache?'] = shimcache_data
+
+			# Getting amcache data.
+			from volatility.plugins.registry import amcache
+			self._config.HIVE_OFFSET = None
+			amc = amcache.AmCache(self._config)
+			calc = amc.calculate()
+			amcache_data = [c_data[1] for c_data in amc.generator(calc)]
+			files_scan['?amcache?'] = amcache_data
+		else:
+			try:
+				from volatility.plugins import shimcachemem
+				has_shimcachemem = True
+			except ImportError:
+				try:
+					from volatility.community.plugins import shimcachemem
+					has_shimcachemem = True
+				except ImportError:
+					has_shimcachemem = False
+
+			if has_shimcachemem:
+				self._config.HIVE_OFFSET = None
+				scm = shimcachemem.ShimCacheMem(self._config)
+				calc = scm.calculate()
+				shimcachemem_data = [c_data[1] for c_data in scm.generator(calc)]
+				files_scan['?shimcachemem?'] = shimcachemem_data
 
 		if self._config.GET_DICT != 'no':
-			print "S4@7t", files_scan
+			with open(self._config.GET_DICT, 'wb') as my_file:
+				pickle.dump(files_scan, my_file)
 			if "--plugins=filescangui" in sys.argv:
 				sys.exit(1)
 		return
@@ -12777,7 +13034,7 @@ class FileScanGui(common.AbstractWindowsCommand):
 			self.img = tk.PhotoImage(data=ICON)
 			app.tk.call('wm', 'iconphoto', app._w, "-default", self.img)
 			FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"), view_hex=True, searchTitle='Search For Files', relate=app).pack(fill=BOTH, expand=YES)
-			app.geometry("700x450")
+			app.geometry("1400x650")
 			app.title("Files Explorer")
 			app.mainloop()
 
@@ -12933,7 +13190,8 @@ class RegistryGui(common.AbstractWindowsCommand):
 			# Wait to get all the data.
 			for c_thread in self.threads:
 				c_thread.join()
-			print "S4@7t", reg_dict
+			with open(self._config.GET_DICT, 'wb') as my_file:
+				pickle.dump(files_scan, my_file)
 			if "--plugins=registrygui" in sys.argv:
 				sys.exit(1)
 		return
@@ -13096,7 +13354,7 @@ def main():
 		root.loadscreen = 'LoadingScreen(root)'
 		options = app.user_dict
 		#root.withdraw()
-		root.subprocess = loading_start('Initial Plugin')
+		root.subprocess = loading_start('Initial VolExp')
 		root.update()
 		root.update_idletasks()
 
