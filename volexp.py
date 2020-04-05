@@ -5613,7 +5613,8 @@ class Options(Frame):
 				bad_args = True
 				err_msg += "You must specify an existing Memory Profile..\n"
 			else:
-				self.buttons['Memory Profile'].configure(foreground="black")
+				pass
+				#self.buttons['Memory Profile'].configure(foreground="black")
 
 		if not os.path.exists(my_arguments['Dump-Dir']):
 			# self.buttons['Dump-Dir'].configure(foreground="red")
@@ -12395,7 +12396,7 @@ class VolExp(common.AbstractWindowsCommand):
 			self.threads.append(t6)
 
 		# Check if not chached
-		if len(winobj_dict) == 0:
+		if len(winobj_dict) == 0 and has_winobj:
 
 			# Colored the winobj menu.
 			view_menu_bar.entryconfig(5, background='red')
@@ -12961,50 +12962,52 @@ class FileScanGui(common.AbstractWindowsCommand):
 		files_scan['?shimcache?']    = []
 		files_scan['?amcache?']      = []
 
-		if (self.kaddr_space.profile.metadata.get("major"), self.kaddr_space.profile.metadata.get("minor")) != (6, 4):
-			# Getting also information about execution program.
-			from volatility.plugins.registry import userassist
+		# All of this modules require crypto.
+		if has_crypto:
+			if (self.kaddr_space.profile.metadata.get("major"), self.kaddr_space.profile.metadata.get("minor")) != (6, 4):
+				# Getting also information about execution program.
+				from volatility.plugins.registry import userassist
 
-			# Getting userassist data.
-			self._config.HIVE_OFFSET = None
-			ua = userassist.UserAssist(self._config)
-			userassist.debug.error = lambda e: sys.stderr.write('[-] The requested key could not be found in the hive(s) searched\n')
-			calc = ua.calculate()
-			userassist_data = [c_data[1] for c_data in ua.generator(calc)]
-			files_scan['?userassist?'] = userassist_data
+				# Getting userassist data.
+				self._config.HIVE_OFFSET = None
+				ua = userassist.UserAssist(self._config)
+				userassist.debug.error = lambda e: sys.stderr.write('[-] The requested key could not be found in the hive(s) searched\n')
+				calc = ua.calculate()
+				userassist_data = [c_data[1] for c_data in ua.generator(calc)]
+				files_scan['?userassist?'] = userassist_data
 
-			# Getting shimcache data.
-			from volatility.plugins.registry import shimcache
-			self._config.HIVE_OFFSET = None
-			sc = shimcache.ShimCache(self._config)
-			calc = sc.calculate()
-			shimcache_data = [c_data[1] for c_data in sc.generator(calc)]
-			files_scan['?shimcache?'] = shimcache_data
+				# Getting shimcache data.
+				from volatility.plugins.registry import shimcache
+				self._config.HIVE_OFFSET = None
+				sc = shimcache.ShimCache(self._config)
+				calc = sc.calculate()
+				shimcache_data = [c_data[1] for c_data in sc.generator(calc)]
+				files_scan['?shimcache?'] = shimcache_data
 
-			# Getting amcache data.
-			from volatility.plugins.registry import amcache
-			self._config.HIVE_OFFSET = None
-			amc = amcache.AmCache(self._config)
-			calc = amc.calculate()
-			amcache_data = [c_data[1] for c_data in amc.generator(calc)]
-			files_scan['?amcache?'] = amcache_data
-		else:
-			try:
-				from volatility.plugins import shimcachemem
-				has_shimcachemem = True
-			except ImportError:
+				# Getting amcache data.
+				from volatility.plugins.registry import amcache
+				self._config.HIVE_OFFSET = None
+				amc = amcache.AmCache(self._config)
+				calc = amc.calculate()
+				amcache_data = [c_data[1] for c_data in amc.generator(calc)]
+				files_scan['?amcache?'] = amcache_data
+			else:
 				try:
-					from volatility.community.plugins import shimcachemem
+					from volatility.plugins import shimcachemem
 					has_shimcachemem = True
 				except ImportError:
-					has_shimcachemem = False
+					try:
+						from volatility.community.plugins import shimcachemem
+						has_shimcachemem = True
+					except ImportError:
+						has_shimcachemem = False
 
-			if has_shimcachemem:
-				self._config.HIVE_OFFSET = None
-				scm = shimcachemem.ShimCacheMem(self._config)
-				calc = scm.calculate()
-				shimcachemem_data = [c_data[1] for c_data in scm.generator(calc)]
-				files_scan['?shimcachemem?'] = shimcachemem_data
+				if has_shimcachemem:
+					self._config.HIVE_OFFSET = None
+					scm = shimcachemem.ShimCacheMem(self._config)
+					calc = scm.calculate()
+					shimcachemem_data = [c_data[1] for c_data in scm.generator(calc)]
+					files_scan['?shimcachemem?'] = shimcachemem_data
 
 		if self._config.GET_DICT != 'no':
 			with open(self._config.GET_DICT, 'wb') as my_file:
