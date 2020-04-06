@@ -48,11 +48,12 @@ plugin_cols = {
     "winobjgui": {"cols": [""], "options":["GET_DICT"]},
     "mftparsergui": {"cols": [""], "options":["GET_DICT"]},
     "filescangui": {"cols": [""], "options":["DUMP_DIR", "GET_DICT"]},
+    "structanalyze": {"cols": [""], "options": ["STRUCT", "ADDR", "PID"]}
 }
 
 dumpers = ["dlldump", "procdump", "vaddump", "moddump", "dumpfiles", "malfind", "yarascan"]
 
-all_options = ["BASE", "MEMORY", "REGEX", "PID", "OFFSET", "NAME", "PHYSOFFSET", "PHYSICAL_OFFSET", "IGNORE_CASE", "DUMP_DIR", "YARA_FILE", "KERNEL", "ALL", "CASE", "WIDE", "SIZE", "REVERSE", "GET_DICT"]
+all_options = ["BASE", "MEMORY", "REGEX", "PID", "OFFSET", "NAME", "PHYSOFFSET", "PHYSICAL_OFFSET", "IGNORE_CASE", "DUMP_DIR", "YARA_FILE", "KERNEL", "ALL", "CASE", "WIDE", "SIZE", "REVERSE", "GET_DICT", "STRUCT", "ADDR"]
 
 outputs = ["text", "json", "csv"]
 
@@ -410,6 +411,8 @@ def get_parser():
     parser.add_argument("--size", help="Size of preview hexdump in bytes (default: 256) (yarascan)", action = "store")
     parser.add_argument("--reverse", help="Reverse [REVERSE] number of bytes (default: 0) (yarascan)", action = "store")
     parser.add_argument("--kdbg", help="Manually select KDBG value", action = "store")
+    parser.add_argument("--addr", help="Address releated to the address space of the kernel or of the pid (if specified)", action = "store")
+    parser.add_argument("--struct", help="Struct name", action = "store")
     parser.add_argument("-M", "--getdict", help="Get dictionary argument for gui plugins", action = "store")
     return parser
 
@@ -635,7 +638,15 @@ def main():
         if "GET_DICT" not in items["options"]:
             myconfigs.config.GET_DICT = 'no'
         else:
-            myconfigs.config.GET_DICT = str(args.keepname)
+            myconfigs.config.GET_DICT = str(args.getdict)
+        if "ADDR" not in items["options"]:
+            myconfigs.config.ADDR = None
+        else:
+            myconfigs.config.ADDR = str(args.addr)
+        if "STRUCT" not in items["options"]:
+            myconfigs.config.STRUCT = None
+        else:
+            myconfigs.config.STRUCT = str(args.struct)
         if "PHYSOFFSET" not in items["options"]:
             myconfigs.config.PHYSOFFSET = None
         else:
@@ -700,4 +711,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -13,12 +13,11 @@ import urllib					# virustotal check.
 from webbrowser import open_new # go to github page
 import StringIO, string, pickle, re
 import os, sys, time, logging, random, copy
-import threading, Queue, subprocess, ast, inspect, functools
+import threading, Queue, subprocess, inspect, functools
 import turtle, ttk
-from turtle import ScrolledCanvas, RawTurtle, TurtleScreen
 from ttk import Frame, Treeview, Scrollbar, Progressbar, Combobox
 import Tkinter as tk
-from Tkinter import N, E, W, S, END, YES, BOTH, PanedWindow, Tk, VERTICAL, LEFT, Menu, StringVar, RIGHT, HORIZONTAL, X, Y, BOTTOM, Text, NONE, SOLID, TOP, INSERT
+from Tkinter import N, E, W, S, END, YES, BOTH, PanedWindow, Tk, LEFT, Menu, StringVar, RIGHT, HORIZONTAL, X, Y, BOTTOM, Text, NONE, SOLID, TOP, INSERT
 import tkFont
 import tkFileDialog
 import tkColorChooser
@@ -36,14 +35,11 @@ import volatility.win32.tasks as tasks
 import volatility.win32.rawreg as rawreg
 import volatility.plugins.common as common
 import volatility.plugins.vadinfo as vadinfo
-import volatility.plugins.verinfo as verinfo
 import volatility.plugins.filescan as filescan
-import volatility.plugins.taskmods as taskmods
 import volatility.plugins.procdump as procdump
 import volatility.plugins.mftparser as mftparser
 import volatility.plugins.dumpfiles as dumpfiles
 import volatility.plugins.privileges as privileges
-import volatility.plugins.malware.impscan as impscan
 
 #region Try imports
 try:
@@ -2814,8 +2810,8 @@ class Threads(Frame):
 
 		# Create the tables
 		dis_tree = TreeTable(pw, headers=('Address', 'OP', 'Disasmble'), data=hex_dis[1].splitlines())
-		dis_tree.tree['height'] = 7 if 7 < len(data) else len(data)
 		hex_tree = TreeTable(pw, headers=('Address', "Hex", "Dump"), data=hex, resize=True)
+		hex_tree.tree['height'] = 7
 		pw.add(dis_tree)
 		pw.add(hex_tree)
 		hex_tree.pack(expand=YES, fill=BOTH)
@@ -5369,6 +5365,43 @@ class StructExplorer(Explorer):
 			# for i in self.tree.tree.get_children():
 			#	self.tree.tree.delete(i)
 
+	def GetDBPointer(self, path, not_case_sensitive=False, return_none_on_bad_path=False):
+		'''
+		GetDBGPointer hook,
+		parse the struct on real time when we go deep inside the struct.
+		:param path: GetDBPointer param
+		:param not_case_sensitive: GetDBPointer param
+		:param return_none_on_bad_path: GetDBPointer param
+		:return: GetDBPointer return
+		'''
+		to_return = Explorer.GetDBPointer(self, path, not_case_sensitive, return_none_on_bad_path)
+		path_list = self.current_directory.split("\\")
+
+		# If we already have this information
+		if len(path_list) < 3:
+			return to_return
+		struct_path = ''
+		pMftExp = self.dict
+		for key in path_list:
+			if pMftExp.has_key(key):
+				pMftExp = pMftExp[key]
+				struct_path += '.{}'.format(key)
+
+		if not pMftExp.has_key('|properties|'):
+			return to_return
+
+		# Get chiled structs:
+		s = path_list[-1]
+		struct_addr = pMftExp['|properties|'][1]
+		struct_type = pMftExp['|properties|'][2]
+		try:
+			struct = obj.Object(struct_type, struct_addr, self.sa_self.kaddr_space)
+			self.sa_self.parser(struct, 0, 3, s, pMftExp)
+		except:
+			pass # Unable to parse some object
+		return to_return
+
+
 class PopUp(tk.Toplevel):
 	def __init__(self, options, func_to_call, *args, **kwargs):
 		tk.Toplevel.__init__(self, *args, **kwargs)
@@ -7453,6 +7486,7 @@ class DllsTable(TreeTable):
 		pe_conf.readonly = {}
 		pe_conf.PROFILE = volself._config.PROFILE
 		pe_conf.LOCATION = volself._config.LOCATION
+		pe_conf.KDBG = volself._config.KDBG
 		pe_conf.kaddr_space = utils.load_as(pe_conf)
 
 		task = obj.Object("_EPROCESS", process_bases[self.pid or int(mt_item['values'][self.main_table.text_by_item])]["proc"].obj_offset, pe_conf.kaddr_space) #process_bases[self.pid or int(mt_item['values'][self.main_table.text_by_item])]["proc"]
@@ -7671,6 +7705,7 @@ class ProcessesTable(TreeTable):
 			table_conf.readonly = {}
 			table_conf.PROFILE = volself._config.PROFILE
 			table_conf.LOCATION = volself._config.LOCATION
+			table_conf.KDBG = volself._config.KDBG
 			self.table_conf = table_conf
 			self.kaddr_space = utils.load_as(self.table_conf)
 			self.task_list = list(tasks.pslist(self.kaddr_space))
@@ -8495,7 +8530,6 @@ class VolExp(common.AbstractWindowsCommand):
 		opts = dict(config.opts)
 		common.AbstractWindowsCommand.__init__(self, config, *args, **kwargs)
 		self._config = config
-		self.start_profile=self._config.profile
 		volself = self
 		config.add_option('DUMP-DIR', short_option='D', default=None,
 						  cache_invalidator=False,
@@ -8562,15 +8596,12 @@ class VolExp(common.AbstractWindowsCommand):
 		else:
 			self.kaddr_space = utils.load_as(self._config)
 
-
 		location = self._config.LOCATION
 		dump_dir = self._config.DUMP_DIR
 		profile = self._config.PROFILE
 		api_key = self._config.API_KEY
 		vol_path = self._vol_path
 		self.get_all_plugins()
-		if self.is_memtriage:
-			self._config.KDBG = None
 
 	def popup_options(self, event=None):
 		'''
@@ -8641,8 +8672,8 @@ class VolExp(common.AbstractWindowsCommand):
 					return
 			elif item == 'KDBG Address (for faster loading)':
 				if dict[item] != '' and (isinstance(dict[item], int) or dict[item].isdigit()):
-					self._config.KDBG = dict[item]
-					self._config.opts['kdbg'] = dict[item]
+					self._config.KDBG = int(dict[item])
+					self._config.opts['kdbg'] = int(dict[item])
 				elif dict[item] != '':
 					messagebox.showerror("Error", "You most specify the KDBG-Address as int", parent=self)
 					return
@@ -9318,6 +9349,7 @@ class VolExp(common.AbstractWindowsCommand):
 		handles_conf.readonly = {}
 		handles_conf.PROFILE = self._config.PROFILE
 		handles_conf.LOCATION = self._config.LOCATION
+		handles_conf.KDBG = self._config.KDBG
 		handles_plug = handlesplugin.Handles(handles_conf)
 
 		# Run in thread so the program wont crush from debug.error inside |
@@ -9328,6 +9360,8 @@ class VolExp(common.AbstractWindowsCommand):
 
 		# Go all over the handels and insert them to the global process_handles.
 		for handle_pid, handle, handle_type, handle_value in all_handles:
+
+			handle_pid = int(handle_pid) # memtriage realtime problem, so i want to create new integer and not a pointer to a reference.
 
 			# Create a list in the process_handles[pid] (if not exist)
 			if not process_handles.has_key(int(handle_pid)):
@@ -9489,6 +9523,7 @@ class VolExp(common.AbstractWindowsCommand):
 		verinfo_conf.readonly = {}
 		verinfo_conf.PROFILE = self._config.PROFILE
 		verinfo_conf.LOCATION = self._config.LOCATION
+		verinfo_conf.KDBG = self._config.KDBG
 		verinfo_conf._kaddr_space = utils.load_as(verinfo_conf)
 
 		task_list = tasks.pslist(verinfo_conf._kaddr_space)
@@ -9503,15 +9538,19 @@ class VolExp(common.AbstractWindowsCommand):
 			# Go all over the process modules
 			for module in task.get_load_modules():
 				pefile = obj.Object("_IMAGE_DOS_HEADER", module.DllBase, process_addr_space)
-				if pefile.is_valid():
+				if pefile.is_valid() and module:
 					vinfo = pefile.get_version_info()
-					if module:
-						files_info[str(module.FullDllName).lower()] = {}
+					files_info[str(module.FullDllName).lower()] = {}
 
-						# Insert the data to the files_info["file_name"] -> [type] = value (if there is any data)
-						if vinfo:
+					# Insert the data to the files_info["file_name"] -> [type] = value (if there is any data)
+					if vinfo:
+
+						# Remove this try when volatility fix this problem on new profiles.
+						try:
 							for type, value in vinfo.get_file_strings():
 								files_info[str(module.FullDllName).lower()][type] = value
+						except (ValueError, TypeError, AttributeError, obj.InvalidOffsetError):
+							pass # TypeError: unsupported operand type(s) for +: 'NoneType' and 'int', InvalidOffsetError: Invalid Address <addr>, instantiating Key <key>
 		job_queue.put_alert((id, 'VolExp Search Files Metadata', 'Get files company name, version, realname...', 'Done'))
 		done_run['files_info'] = files_info
 
@@ -9569,6 +9608,7 @@ class VolExp(common.AbstractWindowsCommand):
 		my_connections_conf.readonly = {}
 		my_connections_conf.PROFILE = self._config.PROFILE
 		my_connections_conf.LOCATION = self._config.LOCATION
+		my_connections_conf.KDBG = self._config.KDBG
 
 		# If windows xp
 		if int(self.kaddr_space.profile.metadata.get('major')) <= 5:
@@ -9751,6 +9791,7 @@ class VolExp(common.AbstractWindowsCommand):
 		svscan_conf.readonly = {}
 		svscan_conf.PROFILE = self._config.PROFILE
 		svscan_conf.LOCATION = self._config.LOCATION
+		svscan_conf.KDBG = self._config.KDBG
 		svscan_plug = svcscan.SvcScan(svscan_conf)
 
 		# Get all services from svcscan.calculate()
@@ -9888,14 +9929,14 @@ class VolExp(common.AbstractWindowsCommand):
 
 		# Get the command line according to if its memtriage or volatility
 		if self.is_memtriage:
-			command_line = r'"{}" "{}" --plugins=mftparsergui -M {}'.format(sys.executable, self._vol_path, file_name)
+			command_line = r'"{}" "{}" --plugins=mftparsergui -M "{}"'.format(sys.executable, self._vol_path, file_name)
 		else:
 
 			# Get the file path and profile
 			with lock:
 				file_path = urllib.url2pathname(volself._config.location[7:])
 				profile = self._config.PROFILE
-			command_line = r'"{}" "{}" -f "{}" --profile={} mftparsergui -M {}'.format(sys.executable, self._vol_path, file_path, profile, file_name)
+			command_line = r'"{}" "{}" -f "{}" --profile={} mftparsergui -M "{}"'.format(sys.executable, self._vol_path, file_path, profile, file_name)
 
 		# Add to job queue
 		id = time.time()
@@ -9947,14 +9988,14 @@ class VolExp(common.AbstractWindowsCommand):
 
 		# Get the command line according to if its memtriage or volatility
 		if self.is_memtriage:
-			command_line = r'"{}" "{}" --plugins=filescangui -M {}'.format(sys.executable, self._vol_path, file_name)
+			command_line = r'"{}" "{}" --plugins=filescangui -M "{}"'.format(sys.executable, self._vol_path, file_name)
 		else:
 
 			# Get the file path and profile
 			with lock:
 				file_path = urllib.url2pathname(volself._config.location[7:])
 				profile = self._config.PROFILE
-			command_line = r'"{}" "{}" -f "{}" --profile={} filescangui -M {}'.format(sys.executable, self._vol_path, file_path, profile, file_name)
+			command_line = r'"{}" "{}" -f "{}" --profile={} filescangui -M "{}"'.format(sys.executable, self._vol_path, file_path, profile, file_name)
 
 		# Add to job queue
 		id = time.time()
@@ -10037,14 +10078,14 @@ class VolExp(common.AbstractWindowsCommand):
 
 		# Get the command line according to if its memtriage or volatility
 		if self.is_memtriage:
-			command_line = r'"{}" "{}" --plugins=winobjgui -M {}'.format(sys.executable, self._vol_path, file_name)
+			command_line = r'"{}" "{}" --plugins=winobjgui -M "{}"'.format(sys.executable, self._vol_path, file_name)
 		else:
 
 			# Get the file path and profile
 			with lock:
 				file_path = urllib.url2pathname(volself._config.location[7:])
 				profile = self._config.PROFILE
-			command_line = r'"{}" "{}" -f "{}" --profile={} winobjgui -M {}'.format(sys.executable, self._vol_path, file_path, profile, file_name)
+			command_line = r'"{}" "{}" -f "{}" --profile={} winobjgui -M "{}"'.format(sys.executable, self._vol_path, file_path, profile, file_name)
 
 		# Add to job queue
 		id = time.time()
@@ -11041,7 +11082,7 @@ class VolExp(common.AbstractWindowsCommand):
 
 				saved_data[dict_name] = done_run[dict_name]
 
-		file_name = save_file_name = save_file_name or r'{}\volexp_{}.atz'.format(location_path or self._config.DUMP_DIR, time.time())
+		file_name = save_file_name = save_file_name or os.path.join(location_path or self._config.DUMP_DIR, r'volexp_{}.atz'.format(time.time()))
 		saved_data['vol_path'] = vol_path
 		saved_data['location'] = location
 		saved_data['dump_dir'] = dump_dir
@@ -11120,6 +11161,7 @@ class VolExp(common.AbstractWindowsCommand):
 		my_memtriage_conf.readonly = {}
 		my_memtriage_conf.PROFILE = self._config.PROFILE
 		my_memtriage_conf.LOCATION = self._config.LOCATION
+		my_memtriage_conf.KDBG = self._config.KDBG
 		memtriage_kaddr_space = utils.load_as(my_memtriage_conf)
 		current_ps_list = list(tasks.pslist(memtriage_kaddr_space))
 
@@ -11222,6 +11264,9 @@ class VolExp(common.AbstractWindowsCommand):
 				elif after_proc and data[1] != proc_data[2]:
 					return index
 				index += 1
+
+			# Return the last index of the list if no item found (unable to find parent process).
+			return len(list)
 
 
 		# Go all over the process tree # Image Type, Context Switch, Windows Status,
@@ -12519,6 +12564,8 @@ class VolExp(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
+		print '[<3] Hop you find what you need bye bye'
+		sys.exit(1)
 
 class StructAnalyze(common.AbstractWindowsCommand):
 	"""Analyze an object (Gui)."""
@@ -12531,7 +12578,7 @@ class StructAnalyze(common.AbstractWindowsCommand):
 
 		# Handle User Input.
 		self.kaddr_space = utils.load_as(self._config)
-		if config.PID != 4:
+		if config.PID and config.PID != 4:
 			for task in tasks.pslist(self.kaddr_space):
 				if int(task.UniqueProcessId) == int(config.PID):
 					self.kaddr_space = task.get_process_address_space()
@@ -12623,6 +12670,8 @@ class StructAnalyze(common.AbstractWindowsCommand):
 		:return: None
 		'''
 		global volself
+		global root
+		job_queue.put_alert = job_queue.put
 		outfd.write("GL & HF <3")
 		root = Tk()
 		volself = self
@@ -12637,8 +12686,31 @@ class StructAnalyze(common.AbstractWindowsCommand):
 		self.get_se_frame(root, flag)
 		root.title("Struct Analayzer {} ({})".format(self._config.STRUCT, self._config.ADDR))
 		root.geometry("950x450")
-		#root.title("Struct Analayzer")
-		root.mainloop()
+		
+		# mainloop
+		while True:
+			root.update()
+			root.update_idletasks()
+
+			# If there is function in the Queue then run it.
+			if queue.empty():
+				time.sleep(0.1)
+			else:
+				func, args = queue.get()
+				if len(args) > 0:
+
+					# Get kwargs also in the args (if the last args is tuple ('**kwargs', dict)
+					if type(args[-1]) is tuple and args[-1][0] == '**kwargs':
+
+						# Check if there is also *args or only **kwargs
+						if len(args) > 1:
+							func(*args[:-1], **args[-1][1])
+						else:
+							func(**args[-1][1])
+					else:
+						func(*args)
+				else:
+					func()
 
 	def write(self, object, data):
 		'''
@@ -12648,6 +12720,17 @@ class StructAnalyze(common.AbstractWindowsCommand):
 		:return: None
 		'''
 		object.write(data)
+
+	def render_json(self, outfd, data):
+		'''
+		Memtriage support
+		:param outfd: writer (stringio)
+		:param data: the data as iterator (calculate())
+		:return: Never return (mainloop inside render_text)
+		'''
+		self.render_text(outfd, data)
+		print '[<3] Hop you find what you need bye bye'
+		sys.exit(1)
 
 class WinObjGui(common.AbstractWindowsCommand):
 	"""WinObj (Explorer GUI plugin)"""
@@ -12779,13 +12862,14 @@ class WinObjGui(common.AbstractWindowsCommand):
 
 	def calculate(self):
 		if not has_winobj:
-			debug.error('Please download winobj.py module (from the kslgroup github)')
+			debug.error('Please download winobj.py plugin (from the kslgroup github)')
 		winobj_calc = winobj.WinObj(self._config)
 		self.win_obj(winobj_calc, winobj_dict)
-		if self._config.GET_DICT != 'no':
+		#                                    memtriage pop from sys.argv
+		if self._config.GET_DICT != 'no' or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
 			with open(self._config.GET_DICT, 'wb') as my_file:
 				pickle.dump(winobj_dict, my_file)
-			if "--plugins=winobjgui" in sys.argv:
+			if "--plugins=winobjgui" in sys.argv or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
 				sys.exit(1)
 		return
 
@@ -12797,6 +12881,8 @@ class WinObjGui(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
+		print '[<3] Hop you find what you need bye bye'
+		sys.exit(1)
 
 	def render_text(self, outfd, data):
 		global volself
@@ -12878,10 +12964,11 @@ class MftParserGui(common.AbstractWindowsCommand):
 	def calculate(self):
 		parser = mftparser.MFTParser(self._config).calculate()
 		self.mft_parser(parser)
-		if self._config.GET_DICT != 'no':
+		#                                    memtriage pop from sys.argv
+		if self._config.GET_DICT != 'no' or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
 			with open(self._config.GET_DICT, 'wb') as my_file:
 				pickle.dump(mft_explorer, my_file)
-			if "--plugins=mftparsergui" in sys.argv:
+			if "--plugins=mftparsergui" in sys.argv or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
 				sys.exit(1)
 		return
 
@@ -12893,6 +12980,8 @@ class MftParserGui(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
+		print '[<3] Hop you find what you need bye bye'
+		sys.exit(1)
 
 	def render_text(self, outfd, data):
 		global volself
@@ -13009,10 +13098,11 @@ class FileScanGui(common.AbstractWindowsCommand):
 					shimcachemem_data = [c_data[1] for c_data in scm.generator(calc)]
 					files_scan['?shimcachemem?'] = shimcachemem_data
 
-		if self._config.GET_DICT != 'no':
+		#                                    memtriage pop from sys.argv
+		if self._config.GET_DICT != 'no' or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
 			with open(self._config.GET_DICT, 'wb') as my_file:
 				pickle.dump(files_scan, my_file)
-			if "--plugins=filescangui" in sys.argv:
+			if "--plugins=filescangui" in sys.argv or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
 				sys.exit(1)
 		return
 
@@ -13024,9 +13114,12 @@ class FileScanGui(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
+		print '[<3] Hop you find what you need bye bye'
+		sys.exit(1)
 
 	def render_text(self, outfd, data):
 		global volself
+		global root
 
 		if self._config.GET_DICT == 'no':
 			outfd.write("GL & HF <3")
@@ -13039,7 +13132,32 @@ class FileScanGui(common.AbstractWindowsCommand):
 			FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"), view_hex=True, searchTitle='Search For Files', relate=app).pack(fill=BOTH, expand=YES)
 			app.geometry("1400x650")
 			app.title("Files Explorer")
-			app.mainloop()
+			root = app
+
+			# mainloop
+			while True:
+				root.update()
+				root.update_idletasks()
+
+				# If there is function in the Queue then run it.
+				if queue.empty():
+					time.sleep(0.1)
+				else:
+					func, args = queue.get()
+					if len(args) > 0:
+
+						# Get kwargs also in the args (if the last args is tuple ('**kwargs', dict)
+						if type(args[-1]) is tuple and args[-1][0] == '**kwargs':
+
+							# Check if there is also *args or only **kwargs
+							if len(args) > 1:
+								func(*args[:-1], **args[-1][1])
+							else:
+								func(**args[-1][1])
+						else:
+							func(*args)
+					else:
+						func()
 
 class RegistryGui(common.AbstractWindowsCommand):
 	"""Registry (GUI plugin)"""
@@ -13188,14 +13306,16 @@ class RegistryGui(common.AbstractWindowsCommand):
 
 	def calculate(self):
 		self.registry_keys()
-		if self._config.GET_DICT != 'no':
+
+		#                                    memtriage pop from sys.argv
+		if self._config.GET_DICT != 'no' or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
 
 			# Wait to get all the data.
 			for c_thread in self.threads:
 				c_thread.join()
 			with open(self._config.GET_DICT, 'wb') as my_file:
-				pickle.dump(files_scan, my_file)
-			if "--plugins=registrygui" in sys.argv:
+				pickle.dump(reg_dict, my_file)
+			if "--plugins=registrygui" in sys.argv or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
 				sys.exit(1)
 		return
 
@@ -13207,6 +13327,8 @@ class RegistryGui(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
+		print '[<3] Hop you find what you need bye bye'
+		sys.exit(1)
 
 	def render_text(self, outfd, data):
 		global queue
