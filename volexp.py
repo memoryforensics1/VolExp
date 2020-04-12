@@ -81,6 +81,12 @@ except ImportError:
 	has_requests = False
 	debug.warning('to run this plugin using virustotal result please install requests module (run on shell "pip install requests")')
 
+try:
+	import csv
+	has_csv = True
+except ImportError:
+	has_csv = False
+
 #endregion Try Imports
 
 #region Constans and globals
@@ -1728,7 +1734,8 @@ TIP_LIST = ['Tip of the investigation\nAll the explorers have a search [ctrl+f] 
 			'Tip of the investigation\nAll explorers search [ctrl+f] have a feature to search on any field you wish\n(File Explorer, WinObj Explorer, MFT explorer, Struct Analyze)',
 			'Tip of the investigation\nIf you need more information on something you probebly can get this data using struct analyze',
 			'Tip of the investigation\nOn any table you can select\hide some columns (some of them dont display all the information by default)',
-			'Tip of the investigation\nOn any table you can rollback to the original order using ctrl+t (unfilter)',]
+			'Tip of the investigation\nOn any table you can rollback to the original order using ctrl+t (unfilter)',
+            'Tip of the investigation\nThis is highly recommended to go to winobj \/\Driver\ & \/\Device\ & \/\Callback\ and search for something bad inside the kernel space',]
 
 ASCII = r" 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#\$%&\'\(\)\*\+,-\./:;<=>\?@\[\]\^_`\{\|\}\\\~\t"
 ABS_X = 60
@@ -1745,7 +1752,7 @@ TreeTable_CULUMNS = {} # an TreeTable global to store all the user preference fo
 files_info = {'/done/': False}
 process_dlls = {} # {pid :[dlls name]}
 process_handles = {} # {pid: [(handle type, handle val)]}
-process_bases = {} # {pid: {proc: _EPROCESS, dlls: {dll name: dll base}}}
+process_bases = {} # {pid: {proc: _EPROCESS, dlls: {dll name: dll base}, ldr: {dll name: ldr address}}}
 process_threads = {} # {pid: {tid:(all thread info)}}
 process_connections = {} # {pid: [(connection info)]}
 process_imports = {} # {pid: [(import info)]}
@@ -1814,7 +1821,7 @@ def strings_unicode(buf, n=5):
 	for match in compiled.finditer(buf):
 		try:
 			yield hex(match.start()), match.group().decode("utf-16")
-		except:
+		except ZeroDivisionError:
 			pass
 
 def get_ascii_unicode(buf, as_string=False ,remove_hex=False, n=5):
@@ -1949,6 +1956,7 @@ def run_struct_analyze(struct_type, address, app=None, pid=4, as_thread=True, wr
 	sa_conf.remove_option('DUMP-DIR')
 	sa_conf.remove_option('start')
 	sa_conf.remove_option('START')
+	sa_conf.optparser.set_conflict_handler("resolve")
 	sa_conf.readonly = {}
 	sa_conf.PROFILE = self._config.PROFILE
 	sa_conf.LOCATION = self._config.LOCATION
@@ -2157,7 +2165,7 @@ def dump_pe(self, space, base, dump_file, mem=False):
 		for offset, code in image:
 			of.seek(offset)
 			of.write(code)
-	except :
+	except ZeroDivisionError:
 		print 'failed'
 	of.close()
 	of = open(os.path.join(self._config.DUMP_DIR, dump_file), 'rb')
@@ -2219,7 +2227,7 @@ def virus_total(hash, process_name, pid, file_path, apikey=None):
 	try:
 		response = requests.get(url, params=params)
 		result = response.json()
-	except:
+	except requests.ConnectionError:
 		debug.warning('Virus Total Failed: you are not connected to the internet/you disconnected for a momonet(try to see if there is connection problems and try again later).')
 		return
 	if result.has_key(u'positives'):
@@ -2337,12 +2345,12 @@ class SmartChoose(tk.Toplevel):
 		self.select_box.focus_set()
 		self.select_box.current(choose_list.index(default) if default else 0)
 		self.select_box.pack()
-
 		self.back_button = tk.Button(self, text="<- Save & Continue ->", command=self.Save)
 		self.back_button.pack(side=tk.BOTTOM)
 		self.dereference = None
 
 	def Save(self):
+		''' Pick the user choose and call func'''
 		user_choose = self.select_box.get()
 		if not user_choose in self.choose_list:
 
@@ -2460,7 +2468,7 @@ class Image(Frame):
 		app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 
 		FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"),
-					 view_hex=True, searchTitle='Search For Files', path=os.path.join(change_path, file_name), relate=app).pack(fill=BOTH, expand=YES,)
+					 searchTitle='Search For Files', path='{}\{}'.format(change_path, file_name), relate=app).pack(fill=BOTH, expand=YES,)
 		app.title("Files Explorer")
 		app.geometry("1400x650")
 
@@ -2831,7 +2839,7 @@ class Threads(Frame):
 				if self.thread_treetable.tree.identify_region(event.x, event.y) == 'separator':
 					self.thread_treetable.resize_col(self.thread_treetable.tree.identify_column(event.x))
 				return
-			except:
+			except tk.TclError:
 				return
 		# Double click where no item selected
 		elif len(self.thread_treetable.tree.selection()) == 0 :
@@ -2910,7 +2918,7 @@ class Security(Frame):
 		if process_security[pid].has_key('Groups'):
 			data = process_security[pid]['Groups']
 			group_treetable = TreeTable(self.pw, headers=("Group", "SIDs", "Flags"), data=data, resize=True)
-			group_treetable.tree['height'] = 10 if 10 < len(data) else len(data)
+			group_treetable.tree['height'] = 7 if 7 < len(data) else len(data)
 			group_treetable.pack(expand=YES, fill=BOTH)
 			self.pw.add(group_treetable)
 
@@ -3171,7 +3179,7 @@ class PEImage(Frame):
 		app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 		print change_path, file_name
 		FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"),
-					 view_hex=True, searchTitle='Search For Files', path=os.path.join(change_path, file_name), relate=app).pack(fill=BOTH, expand=YES,)
+					 searchTitle='Search For Files', path='{}\{}'.format(change_path, file_name), relate=app).pack(fill=BOTH, expand=YES,)
 		app.title("Files Explorer")
 		app.geometry("1400x650")
 
@@ -3680,7 +3688,7 @@ class RegViewer(Frame):
 				self.row_search = ('{}{}'.format(self.row_search[0], event.char.lower()), self.row_search[1])
 			after_selected = False
 
-			childrens = list(self.get_all_children())
+			childrens = self.get_all_children()
 
 			# Check all the rows after the current selection.
 			for ht_row in childrens:
@@ -3930,7 +3938,7 @@ class RegViewer(Frame):
 				self.values_table.tree['height'] = 22
 				self.values_table.pack(expand=YES, fill=BOTH)
 				self.disabe_enable_reg_viewer(False)
-			except:
+			except tk.TclError:
 				pass
 
 		queue.put((create_table, (self, data)))
@@ -4010,7 +4018,7 @@ class Explorer(Frame):
 	if there is no '|properties|' key in some key the information will be 0 padding
 	Thats also mean that you cannot create in your table on the first column a item named "|properties|"
 	'''
-	def __init__(self, master, my_dict, headers, view_hex, searchTitle, resize=True, path=None, relate=None, *args, **kwargs):
+	def __init__(self, master, my_dict, headers, searchTitle, resize=True, path=None, relate=None, *args, **kwargs):
 		Frame.__init__(self, master, *args, **kwargs)
 
 		# Configure gird
@@ -4065,6 +4073,9 @@ class Explorer(Frame):
 		self.tree.tree.bind("<Return>", self.OnDoubleClick)
 		self.tree.tree.bind('<Control-f>', self.control_f)
 		self.tree.tree.bind('<Control-F>', self.control_f)
+		if has_csv:
+			self.tree.HeaderMenu.delete(5)
+			self.tree.HeaderMenu.insert_command(5, label='Export Explorer To Csv', command=self.export_table_csv)
 
 		# Tag the directories with "tag_directory" so all will be colored with yellow
 		self.tree.tree.tag_configure('tag_directory', background=_from_rgb((252, 255, 124)))
@@ -4115,6 +4126,42 @@ class Explorer(Frame):
 		app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 		app.title(self.searchTitle)
 		app.geometry("500x300")
+
+	def export_table_csv(self):
+		''' Export the table to csv file '''
+		ans = messagebox.askyesnocancel("Export to csv",
+		                                "Did you mean to export all the explorer data or just this specific table?\npress yes to all the data", parent=self)
+		if ans == None:
+			return
+
+		selected = tkFileDialog.asksaveasfilename(parent=self)
+		if selected and selected != '':
+
+			def export_specific_dict(csv_writer, dict, path):
+
+				# Go all over the dictionary.
+				for key in dict:
+
+					# Return if this is the information key.
+					if key == '|properties|':
+						continue
+
+					# If we want to export all the data or just the current
+					if ans:
+						csv_writer.writerow(['{} {}'.format('~' * path.count('\\'), key)] + (list(dict[key]['|properties|']) if dict[key].has_key('|properties|') else [0 for i in range(len(self.headers)-1)]))
+					elif path == self.current_directory:
+						csv_writer.writerow(['{} {}'.format('~' * path.count('\\'), key)] + (list(dict[key]['|properties|']) if dict[key].has_key('|properties|') else [0 for i in range(len(self.headers)-1)]))
+						continue
+					elif not path.lower() in self.current_directory.lower():
+						return
+
+					export_specific_dict(csv_writer, dict[key], '{}\{}'.format(path, key))
+
+
+			with open(selected, 'w') as fhandle:
+				csv_writer = csv.writer(fhandle)
+				csv_writer.writerow(self.headers)
+				export_specific_dict(csv_writer, self.dict, '')
 
 	def GetDBPointer(self, path, not_case_sensitive=False, return_none_on_bad_path=False):
 		'''
@@ -4312,7 +4359,7 @@ class Explorer(Frame):
 			try:
 				h = self.lv.winfo_geometry().split('x')[1].split('+')[0]
 				tw.geometry("{}x{}".format(self.entry_directory.winfo_width() - 2, h))
-			except:
+			except tk.TclError:
 				pass
 
 	def Down(self, event):
@@ -4424,7 +4471,7 @@ class Explorer(Frame):
 				if self.tree.tree.identify_region(event.x, event.y) == 'separator':
 					self.tree.resize_col(self.tree.tree.identify_column(event.x))
 				return
-			except:
+			except tk.TclError:
 				return
 
 		# Double click where no item selected
@@ -4571,11 +4618,11 @@ class FileExplorer(Frame):
 	'''
 	Explorer with file specific function like dump file.
 	'''
-	def __init__(self, master, dict, headers,  view_hex, searchTitle, resize=True, path=None, relate=None,  *args, **kwargs):
+	def __init__(self, master, dict, headers, searchTitle, resize=True, path=None, relate=None,  *args, **kwargs):
 		Frame.__init__(self, master, *args, **kwargs)
 
 		self.pw = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-		self.exp_frame = Explorer(self.pw, dict[' '], headers, view_hex, searchTitle, resize, path, relate, *args, **kwargs)
+		self.exp_frame = Explorer(self.pw, dict[' '], headers, searchTitle, resize, path, relate, *args, **kwargs)
 		self.tree = self.exp_frame.tree
 		self.exp_frame.tree.aMenu.add_command(label='HexDump', command=self.HexDump)
 		self.exp_frame.tree.aMenu.add_command(label='Dump', command=self.Dump)
@@ -4788,7 +4835,7 @@ class FileExplorer(Frame):
 						my_file.write(good)
 
 					print "[+] File Explorer - Dump File Done ({}).".format(key)
-				except:
+				except Exception:
 					print "[-] File Explorer - Dump File Failed ({}).".format(key)
 	def Dump(self):
 		'''
@@ -4821,7 +4868,7 @@ class FileExplorer(Frame):
 			clicked_addr = values[-1]
 			dump_explorer_file(clicked_addr)
 			queue.put((messagebox.showinfo, ("Dump File", "File Explorer - Dump File Done ({}).".format(values[0]), ('**kwargs', {'parent': self}))))
-		except:
+		except Exception:
 			queue.put((messagebox.showerror, ("Dump File", "File Explorer - Dump File Failed ({}).".format(values[0]), ('**kwargs', {'parent': self}))))
 
 	def HexDump(self):
@@ -4873,21 +4920,98 @@ class FileExplorer(Frame):
 
 			queue.put((show_message_func, ()))
 
+class WinObjExplorer(Explorer):
+	"""
+	Explorer like gui for structs.
+	"""
+
+	NAME_TO_TYPE = {# 'ALPC Port:': '',
+	                # 'Callback': '_CALLBACK_OBJECT', # keep check
+	                'Device': '_DEVICE_OBJECT',
+	                #'Directory': '',
+					'Driver': '_DRIVER_OBJECT',
+					'Event': '_KEVENT',     # ---------------------------------
+	                'Job': '_EJOB',         # todo-> check them on all version
+	                'Mutant': '_KMUTANT',   # ---------------------------------
+	                'Section': '_SECTION_OBJECT', # This object replace in windows 10.
+	                'Semaphore': '_KSEMAPHORE',
+	                #'Session': '',
+	                'SymbolicLink': '_OBJECT_SYMBOLIC_LINK',
+	                'WindowStation': 'tagWINDOWSTATION',
+	                'Type': '_OBJECT_TYPE',}
+
+	def __init__(self, master, dict,  headers=("Object Name", "Type", "Info", "Addr"), searchTitle='Search For Kernel Objects', resize=False, path=None, relate=None, *args, **kwargs):
+		Explorer.__init__(self, master, dict, headers, searchTitle, resize, path, relate, *args, **kwargs)
+
+		self.tree.aMenu.add_command(label='Struct Analyze', command=self.run_struct_analyze)
+
+	def OnDoubleClick(self, event):
+		'''
+		This function hook on double click for symbolic link and go to the symbolic link.
+		:param event: event
+		:return: None
+		'''
+		# Reset the user search
+		self.tree.row_search = ('', 0)
+
+		# Double click on table header to resize
+		if event and event.y < 25 and event.y > 0:
+			try:
+				if self.tree.tree.identify_region(event.x, event.y) == 'separator':
+					self.tree.resize_col(self.tree.tree.identify_column(event.x))
+				return
+			except tk.TclError:
+				return
+
+		# Double click where no item selected
+		elif len(self.tree.tree.selection()) == 0:
+			return
+
+		item = self.tree.tree.selection()[0]
+		if self.tree.tree.item(item)['values'][1] == 'SymbolicLink':
+			self.GoToFile(self.tree.tree.item(item)['values'][2].replace('Target: ', '\/'), False)
+		elif self.tree.tree.item(item)['values'][1] == 'Device':
+			self.GoToFile(self.tree.tree.item(item)['values'][2].replace('Driver: ', '\/'), False)
+		else:
+			Explorer.OnDoubleClick(self, event)
+
+	def run_struct_analyze(self):
+		'''
+		get address and send to the struct analyze function.
+		'''
+		item = self.tree.tree.selection()[0]
+		type = self.tree.tree.item(item)['values'][1]
+		if not WinObjExplorer.NAME_TO_TYPE.has_key(type):
+			print '[-] WinObjExplorer dont support struct analyze on this object ({})'.format(type)
+			return
+		struct_type = WinObjExplorer.NAME_TO_TYPE[type]
+
+		addr = self.tree.tree.item(item)['values'][-1]
+		if not addr:
+			print "[-] Unable to find the address of this {}".format(struct_type)
+			return
+		print "[+] Run Struct Analyze on {}, addr: {}".format(struct_type, addr)
+		threading.Thread(target=run_struct_analyze, args=(struct_type, addr)).start()
+
 class ExpSearch(tk.Toplevel):
 	'''
 	Search for explorer class, handle explorer ctrl+f
 	'''
 	def __init__(self, headers=('Path', 'Name', 'Value'), dict=None, dict_headers=None, controller=None, *args, **kwargs):#(path,name,value)
 		tk.Toplevel.__init__(self, *args, **kwargs)
+
+		# Init variables
 		self.headers = headers
 		self.dict = dict
 		self.dict_headers = dict_headers
 		self.controller = controller
+
+		# Init and pack the class gui.
 		self.grid_rowconfigure(0, weight=1)
 		self.grid_columnconfigure(0, weight=1)
 		self.search_text = tk.Entry(self)
 		self.search_text.insert(10, 'Search text here')
-		self.search_text.bind("<Return>", self.enter_search)
+		self.search_text.bind("<Return>", self.search)
 		self.search_text.pack()
 		self.select_box = Combobox(self, state="readonly", values=self.dict_headers)
 		self.select_box.current(0)
@@ -4896,100 +5020,120 @@ class ExpSearch(tk.Toplevel):
 		self.search_button.pack(fill='x')
 		self.tree = TreeTable(self, headers=headers, data=[], text_by_item=1, resize=True)
 		self.tree.pack(expand=YES, fill=BOTH)
+
+		# Bind and focus
 		self.tree.tree.bind("<Return>", self.OnDoubleClick)
 		self.tree.tree.bind("<Double-1>", self.OnDoubleClick)
 		self.search_text.bind("<FocusIn>", self.focus_in)
 		self.search_text.focus()
 
 	def focus_in(self, event=None):
+		'''
+		This function mark all the text inside the text widget for convenience.
+		:param event: None
+		:return: None
+		'''
 		self.search_text.selection_range(0, tk.END)
 
 	def OnDoubleClick(self, event):
+		'''
+		This fucntio go to the selected item in the parent explorer.
+		:param event: None
+		:return: None
+		'''
 		# Double click on table header to resize
 		if event and event.y < 25 and event.y > 0:
 			try:
 				if self.tree.tree.identify_region(event.x, event.y) == 'separator':
 					self.tree.resize_col(self.tree.tree.identify_column(event.x))
 				return
-			except:
+			except tk.TclError:
 				return
 		# Double click where no item selected
 		elif len(self.tree.tree.selection()) == 0 :
 			return
 
+		# Go and select the clicked item.
 		item = self.tree.tree.selection()[0]
 		clicked_file_path = self.tree.tree.item(item)['values'][0]
-		clicked_file = self.tree.tree.item(item)['values'][1]
-		self.controller.directory_queue.append(self.controller.current_directory)
-		self.controller.directory_queue.append(clicked_file_path)
-		self.controller.GoBack()
-		for ht_row in self.controller.tree.tree.get_children():
-			if self.controller.tree.tree.item(ht_row)['values'][0] == self.tree.tree.item(item)['values'][1]:
-				self.controller.tree.tree.focus(ht_row)
-				self.controller.tree.tree.selection_set(ht_row)
-				self.controller.tree.tree.see(ht_row)
-
-	def enter_search(self, event):
-		self.search()
+		file_name = self.tree.tree.item(item)['values'][1]
+		self.controller.GoToFile('{}\{}'.format(clicked_file_path, file_name), False)
 
 	def recurse_search(self, current_path, current_dir_files):
+		'''
+		A recursive function that go deep inside the dictionary database and look inside the '|properties|' key to find the searched item
+		:param current_path: key name (item name in the explorer)
+		:param current_dir_files: a pointer to the current dictionary to search inside
+		:return: None, its insert the data to the self.found_data (witch later be insert to the table) or call itself recursive inside.
+		'''
+
+		# The item the user want to search
 		my_index = self.dict_headers.index(self.select_box.get())-1
+
+		# Go all over the database dictionary.
 		for c_file in current_dir_files:
+
+			# If it's not the item properties (this is another database).
 			if c_file != '|properties|':
+
+				# If the user search for the first box (the item name) than we append the data here.
 				if self.dict_headers.index(self.select_box.get()) == 0:
+
+					# if this data match the user search than insert it
 					if self.text_to_search in c_file.lower():
 						self.found_data.append((current_path, c_file))
 				self.recurse_search('{}\\{}'.format(current_path, c_file),current_dir_files[c_file])
+
+			# If this is the item properties.
 			else:
+
+				# If this is what the user search for than insert the item to the table.
 				if self.text_to_search in str(tuple(current_dir_files[c_file])[my_index]).lower():
 					self.found_data.append((current_path[:current_path.rfind('\\')], current_path[current_path.rfind('\\')+1:], str(tuple(current_dir_files[c_file])[my_index])))
 
-	def search(self):
+	def search(self, event=None):
+		'''
+		The search handle function that summon the self.recursive_search function.
+		:return: None, this function will insert all the founded item to the table.
+		'''
 
 		self.text_to_search = self.search_text.get().lower()
-		data = []
 		print "[+] searching for: {}".format(self.text_to_search), 'in', self.select_box.get(),'index:', self.dict_headers.index(self.select_box.get())-1
+
 		# Remove previouse searched items.
 		for i in self.tree.tree.get_children():
 			self.tree.tree.delete(i)
 			self.tree.visual_drag.delete(i)
 
 		self.found_data = []
+
 		# Search for files.
 		for c_file in self.dict:
 
 			# Go all over the files.
 			if c_file != '|properties|':
-				self.recurse_search(c_file,self.dict[c_file])
+				self.recurse_search(c_file, self.dict[c_file])
 
+		# Insert all the data to the table
 		self.tree.insert_items(self.found_data)
 
 class StructExplorer(Explorer):
 	"""
 	Explorer like gui for structs.
 	"""
-	def __init__(self, master, dict, sa_self,  headers=("Struct Name", "Member Value", "Struct Address", "Object Type"), view_hex=False, searchTitle='Search', writeSupport=False, relate=None, *args, **kwargs):
-		Explorer.__init__(self, master, dict, headers, view_hex, searchTitle, relate, *args, **kwargs)
-		self.search_button.configure(command=self.control_f_wrap)
-		self.tree.tree.bind('<Control-f>', self.control_f_wrap)
-		self.tree.tree.bind('<Control-F>', self.control_f_wrap)
+	def __init__(self, master, dict, sa_self,  headers=("Struct Name", "Member Value", "Struct Address", "Object Type"), searchTitle='Search', writeSupport=False, relate=None, *args, **kwargs):
+		Explorer.__init__(self, master, dict, headers, searchTitle, relate, *args, **kwargs)
+		
+		# Init Class Variables.
 		self.sa_self = sa_self
-		self.relate=master
+		self.relate = master
 		self.pid = int(sa_self.PID) if hasattr(sa_self, 'PID') and sa_self.PID else 4
 		self.app = None
-		# self.aMenu = Menu(self, tearoff=0)
+
+		# Add write support feature if enable.
 		if writeSupport:
 			self.tree.aMenu.add_command(label="Write", command=self.RunWrite)
-			# self.write_menu = Menu(self.tree.aMenu)
-			# for header in range(len(self.headers)):
-			# 	self.write_menu.add_command(label='{}'.format(self.headers[header]),
-			# 								command=functools.partial(self.RunWrite, header))
-			# self.tree.aMenu.add_cascade(label='Write', menu=self.write_menu)
-		self.tree.aMenu.add_command(label='Dereferense As:', command=self.dereference)
-		self.tree.bind(right_click_event, self.popup)
-
-	def popup(self, event):
-		self.aMenu.tk_popup(event.x_root, event.y_root)
+		self.tree.aMenu.add_command(label='Dereference As:', command=self.dereference)
 
 	def RunWrite(self, wt=1):
 		"""
@@ -5012,11 +5156,11 @@ class StructExplorer(Explorer):
 		struct_type = item['values'][3]
 
 		ex = 'change addresses is not supported'
-		# See if hexa number
+		# Check if hex number.
 		if new_val.startswith('0x'):
 			try:
 				new_val = int(new_val, 16)
-			except:
+			except (TypeError, ValueError):
 				pass
 		elif new_val.isdigit():
 			new_val = int(new_val)
@@ -5032,40 +5176,70 @@ class StructExplorer(Explorer):
 			# Change the item in the table:
 			good_vals = list(item['values'])
 			good_vals[wt] = new_val
-			# item['values'][wt] = new_val
 			self.tree.tree.item(row, values=good_vals)
-			print 'Operation Success'
+			print '[+] Write Operation Success'
 		else:
-			print '[-] Operation Failed {}'.format(ex)
-
-	def control_f_wrap(self, event=None):
-		self.control_f(event)
+			print '[-] Write Operation Failed {}'.format(ex)
 
 	def dereference(self):
+		'''
+		Handle to Dereference As function, calls to self.dereference_func and open the SmartChoose gui.
+		:return: None
+		'''
+		# Get all the profile vtypes and sort it.
 		my_list = list(self.sa_self.kaddr_space.profile.vtypes.keys())
 		my_list = sorted(my_list, key=str.lower)
 		default_struct = '_EPROCESS'
+
+		# Open the SmartChoose to let the user pick an struct.
 		app = SmartChoose(my_list, self.dereference_func, default=my_list[my_list.index(default_struct)])
+
+		# Place the object near to the relate.
+		if self.relate:
+			x = self.relate.winfo_x()
+			y = self.relate.winfo_y()
+			app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 		app.geometry("500x50")
 		app.title('Please choose your real struct type')
 		app.resizable(False, False)
-		# Update until user save choose.
 
 	def dereference_func(self, app):
+		'''
+		This function dereference to the selected struct.
+		:param app: the SmartChoose app
+		:return: None
+		'''
 		item = self.tree.tree.selection()[0]
 		my_item = self.tree.tree.item(item)
-		s = my_item['values'][0]#[my_item['values'][0].index('.') + 1:]
 		struct_addr = my_item['values'][1]
-		struct_type = my_item['values'][3]# app.dereference
+		struct_type = my_item['values'][3]
+		
+		# Error if the user try to dereference an function.
 		if struct_type == 'Function':
 			messagebox.showerror("Error", "This is a Volatility function, not a member of the struct (you can't change this).", parent=self)
 			return
+
+		# Dereference the struct.
 		struct = obj.Object(struct_type, struct_addr, self.sa_self.kaddr_space)
+
+		# Check if this struct specified address is in the physical layer (usually came from scan plugin that scan the physical layer)
+		if not struct or not struct.is_valid():
+			struct = obj.Object(struct_type, struct_addr, self.sa_self.kaddr_space.physical_space(), native_vm=self.sa_self.kaddr_space)
+			if not struct or not struct.is_valid():
+				struct = obj.Object(struct_type, struct_addr, self.sa_self.kaddr_space)
+
+		# Check if the struct is valid
 		if struct:
 			struct = struct.dereference_as(app.dereference)
+
+		# Check if the struct is valid after the dereference and if not alert the user and ask if he want to continue (the struct type is realy matter only on the table the previews derefrence doesn't realy matter).
 		if not struct or not struct.is_valid():
-			if not messagebox.askyesnocancel('Notice', 'Volatility didn\'t recognize {} struct in this address\nare you sure you want to continue?\n(Dereferenced as valid struct: {} (struct.is_valid())(or this struct is none))'.format(struct_type, 'False'), parent=app):
+
+			# Return if the user dont want to continue
+			if not messagebox.askyesnocancel('Notice', 'Volatility didn\'t recognize {} struct in this address\nare you sure you want to continue?\n(Dereferenced as valid struct: {} (struct.is_valid())(or this struct is none))'.format(app.dereference, 'False'), parent=app):
 				return
+
+		# Change the type in the explorer.
 		good_values = list(my_item['values'])
 		good_values[1] = struct.v() if (good_values[-1] != app.dereference) and hasattr('struct', 'v') else good_values[1] # obj.Object(app.dereference, good_values[1], self.sa_self.kaddr_space).v()
 		good_values[-1] = app.dereference
@@ -5073,6 +5247,11 @@ class StructExplorer(Explorer):
 		app.destroy()
 
 	def OnDoubleClick(self, event):
+		'''
+		This function handle double click on any kind of item in the table (wheter is an function or not).
+		:param event: None
+		:return: None
+		'''
 		global queue
 		# Double click on table header to resize
 		if event and event.y < 25 and event.y > 0:
@@ -5080,7 +5259,7 @@ class StructExplorer(Explorer):
 				if self.tree.tree.identify_region(event.x, event.y) == 'separator':
 					self.tree.resize_col(self.tree.tree.identify_column(event.x))
 				return
-			except:
+			except tk.TclError:
 				return
 		# Double click where no item selected
 		elif len(self.tree.tree.selection()) == 0:
@@ -5089,60 +5268,68 @@ class StructExplorer(Explorer):
 		item = self.tree.tree.selection()[0]
 		clicked_file = self.tree.tree.item(item, "text")
 		my_item = self.tree.tree.item(item)
+
+		# Get chiled structs:
+		s = my_item['values'][0]
+		struct_addr = my_item['values'][2]
 		struct_type = my_item['values'][3]
+
+		# Set the current_directory.
 		if struct_type !='Function':
 			self.directory_queue.append(self.current_directory)
 			self.current_directory += "\{}".format(clicked_file)
 			self.entry_directory.delete(0, tk.END)
 			self.entry_directory.insert(0, self.current_directory)
+
 		path_list = self.current_directory.split("\\")
 		struct_path = ''
 		pMftExp = self.dict
+
+		# Go inside the database.
 		for key in path_list:
 			if pMftExp.has_key(key):
 				pMftExp = pMftExp[key]
 				struct_path += '.{}'.format(key)
 
-
-		# Get chiled structs:
-		s = my_item['values'][0]#[my_item['values'][0].index('.') + 1:]
-		struct_addr = my_item['values'][2]
-
 		# Run volatility function
 		if struct_type == 'Function':
-			title = self.master.title()
-			button_text = self.current_directory
 
-			#struct_path = self.current_directory.replace("\\", ".")#button_text[button_text.find(r'\\') + 1:].replace('\\\\','\\').replace('\\', '.') #button_text[len('<- \t \\')-1:button_text.rfind('\\')][button_text.find(r'\\') + 1:].replace('\\', '.')
-			#print 'struct_path', struct_path, len(struct_path)
+			# Get the base object (of this struct analyzer).
+			title = self.master.title()
 			p_type = title[len('Struct Analyzer  '): title.rfind('(') - 1]
 			addr = title[title.rfind('(') + 1: title.rfind(')')]
 			struct = obj.Object(p_type, addr, self.sa_self.kaddr_space)
+
+			# Check if this struct specified address is in the physical layer (usually came from scan plugin that scan the physical layer)
+			if not struct or not struct.is_valid():
+				struct = obj.Object(p_type, addr, self.sa_self.kaddr_space.physical_space(), native_vm=self.sa_self.kaddr_space)
+				if not struct or not struct.is_valid():
+					struct = obj.Object(p_type, addr, self.sa_self.kaddr_space)
+
+			# Walk from the base struct to the current struct.
 			if len(struct_path) > 0:
-				struct = get_right_member(struct, [struct_path[1:]])#eval('{}{}'.format(struct, struct_path))
-			#print struct, type(struct)
+				struct = get_right_member(struct, [struct_path[1:]])
+
 			function = getattr(struct, s)
 
 			# Check if the function invalid
 			if isinstance(function, obj.NoneObject):
-				messagebox.showerror("Error", "This function is None object ({}).".format(repr(function)), parent=self)
+				messagebox.showerror("Error", "This struct is None object ({}).".format(repr(function)), parent=self)
 				return
 
-
-			# check if function take arguments
+			# Check if function take arguments
 			_args = get_func_args(function)
 			arguments = _args.args
 			default_arguments = _args.defaults
-			#print 'Arguments:{}\nDA:{}'.format(arguments, default_arguments)
 
 			# Check if this function get an argument.
 			if arguments:
 				exit_if = False
 
 				# Remove the self argument from the prompt if this function is part of a class.
-				if 'self' in arguments:# and hasattr(function, '__qualname__'):
+				if 'self' in arguments:
 
-					# If the function have only one arguments the disable the createion of the prompt
+					# If the function have only one arguments disable the createion of the prompt
 					if len(arguments) == 1:
 						exit_if = True
 						arguments = []
@@ -5186,29 +5373,40 @@ class StructExplorer(Explorer):
 								pass
 						self.dict_options = dict_options
 
-					#self.app = tk.Toplevel()
+					# Return if there is already an argument popup on the screen.
 					if self.app != None:
 						return
+
+					# Create the popup.
 					self.app = PopUp(arguments_data, set_options)
+					if self.relate:
+						x = self.relate.winfo_x()
+						y = self.relate.winfo_y()
+						self.app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 					self.app.grab_release()
 					self.app.title('{} Arguments:'.format(s))
 					self.app.geometry("450x{}".format(str(int(len(arguments_data)+1)*40)))
 					self.app.attributes('-topmost', 1)
 					self.app.done = False
+
 					def on_exit():
+						# Handle Exit Event
 						self.app.done = 'Exit'
 						self.app.destroy()
-						#return
 					self.app.protocol("WM_DELETE_WINDOW", on_exit)
 
+					# Wait util the user finish
 					while not self.app.done:
 						time.sleep(0.2)
 						root.update_idletasks()
 						root.update()
 
-					# User exit the window
+					# Return if the user exit the window
 					if self.app.done == 'Exit':
+						self.app = None
 						return
+
+					# Destroy the app and init the self.app to None(the user finish after the while)
 					self.app.destroy()
 					self.app = None
 
@@ -5221,26 +5419,33 @@ class StructExplorer(Explorer):
 			def run_function_in_thread(self, function, arguments, s):
 				'''
 				This funcion get an volatility function to run with the arguments, run the function and return a popup to the user.
+				This function run as a thead to make sure the gui not freeze.
 				:param function: The function to run
 				:param arguments: The function parameters
 				:return: None
 				'''
 				global queue
 
-				# Run the function with arguments
-				if arguments and len(arguments) > 0:
+				# The function may fail.
+				try:
 
-					# Run the function with one arguments
-					if len(arguments) == 1:
-						struct = function(arguments[0])
+					# Run the function with arguments
+					if arguments and len(arguments) > 0:
 
-					# Run the function with more than one arguments.
+						# Run the function with one arguments
+						if len(arguments) == 1:
+							struct = function(arguments[0])
+
+						# Run the function with more than one arguments.
+						else:
+							struct = function(*arguments)
+
+					# Run the function without any arguments
 					else:
-						struct = function(*arguments)
-
-				# Run the function without any arguments
-				else:
-					struct = function()
+						struct = function()
+				except Exception as ex:
+					queue.put((messagebox.showerror, ("Error", "This function failed at run time.", ('**kwargs', {'parent': self}))))
+					return
 
 				# Check if the return value is generator
 				if inspect.isgenerator(struct):
@@ -5260,6 +5465,8 @@ class StructExplorer(Explorer):
 					# Search for object inside the values returend (and display them)
 					find_object = False
 					for i in return_gen_list[0]:
+
+						# Check if there is a Struct object inside that generator.
 						if isinstance(i, obj.CType):
 							print '[+] find struct inside the result:', type(i)
 							find_object = True
@@ -5268,12 +5475,26 @@ class StructExplorer(Explorer):
 								_struct = j[return_gen_list[0].index(i)]
 								_data.append((_struct.obj_type, _struct.obj_offset))
 
-							def create_object_generator(_data, i, _struct, s):
+							def create_object_generator(_data, i, s):
+								'''
+								Create a list(generetor) and display it in a table, create an Double-Click event that summon struct analyzer.
+								:param _data: the data
+								:param i: the struct
+								:param s: struct name
+								:return: None
+								'''
 								def run_new_sa(event):
+									'''
+									This function run a struct analyzer inside the generator (if the generator return objects)
+									:param event:
+									:return:
+									'''
 									_self = event.widget
 									_item = _self.selection()[0]
 									_my_item = _self.item(_item)
 									run_struct_analyze(_my_item['values'][0], _my_item['values'][1], pid=int(_self.pid))
+
+								# Init the top level
 								_app = tk.Toplevel()
 								_x = self.relate.winfo_x()
 								_y = self.relate.winfo_y()
@@ -5282,14 +5503,17 @@ class StructExplorer(Explorer):
 								_treetable = TreeTable(_app, headers=_headers, data=_data)
 								p_struct = i
 
-								# Find the pid of the address space
+								# Recursive search of the parent object.
 								while p_struct.obj_parent != None:
 									p_struct = p_struct.obj_parent
-								#_treetable.addr_space = _struct.obj_native_vm
+
+								# Check if that object have UniqueProcessId and if so make sure we using the right virtual memory.
 								if hasattr(p_struct, 'UniqueProcessId'):
 									_treetable.tree.pid = int(p_struct.UniqueProcessId)
 								else:
 									_treetable.tree.pid = 4
+
+								# Pack the data.
 								_treetable.run_new_sa = run_new_sa
 								_treetable.tree.bind("<Double-1>", _treetable.run_new_sa)
 								_treetable.tree['height'] = 8 if 8 < len(_data) else len(_data)
@@ -5297,11 +5521,18 @@ class StructExplorer(Explorer):
 								_app.title("__{}.{}() --> object list(double click to view this struct)".format(struct, s))
 								_app.geometry("300x300")
 
-							queue.put((create_object_generator, (_data, i, _struct, s)))
+							queue.put((create_object_generator, (_data, i, s)))
 
 					# If the value is not object display it tree.in treetable.
 					if not find_object:
 						def display_objects(return_gen_list, struct, s):
+							'''
+							Display the data (if object not found inside).
+							:param return_gen_list: the data (list/generator)
+							:param struct: the struct
+							:param s: struct name
+							:return:
+							'''
 							app = tk.Toplevel()
 							x = self.relate.winfo_x()
 							y = self.relate.winfo_y()
@@ -5315,26 +5546,36 @@ class StructExplorer(Explorer):
 
 						queue.put((display_objects, (return_gen_list, struct, s)))
 
+				# if the double clicked founction return an object (and not generator of objects) than run struct analyzer to that object.
 				elif isinstance(struct, obj.CType):
 					queue.put((run_struct_analyze, (struct.obj_type, struct.obj_offset)))
+
+				# The function return none special vlaue (example: just a string, not object of list) than just display it.
 				else:
 					queue.put((messagebox.showinfo, ("{} output:".format(s), "{}".format(str(struct)), ('**kwargs', {'parent':self}))))
 
 			threading.Thread(target=run_function_in_thread, args=(self, function, arguments, s)).start()
 
-		# Get inside some member of this struct
+		# Get inside some member of this struct (double click on none function option)
 		else:
 			try:
 				struct = obj.Object(struct_type, struct_addr, self.sa_self.kaddr_space)
+
+				# Check if this struct specified address is in the physical layer (usually came from scan plugin that scan the physical layer)
+				if not struct or not struct.is_valid():
+					struct = obj.Object(struct_type, struct_addr, self.sa_self.kaddr_space.physical_space(), native_vm=self.sa_self.kaddr_space)
+					if not struct or not struct.is_valid():
+						struct = obj.Object(struct_type, struct_addr, self.sa_self.kaddr_space)
+
 				self.sa_self.parser(struct, 0, 3, s, pMftExp)
-			except:
+			except Exception:
 				print '[-] unable to parse this object (addr: {}, type: {})'.format(struct_addr, struct_type)
 
 			data = []
 			directories = []
+
+			# Create the data.
 			for key in pMftExp.keys():
-				my_tup = None
-				# print key
 				if key != "|properties|":
 
 					my_tup = tuple([0 for i in range(len(self.headers) - 1)])
@@ -5347,13 +5588,19 @@ class StructExplorer(Explorer):
 						directories.append(key)
 					my_tup = (key,) + my_tup if type(my_tup) == tuple else (key, str(my_tup))
 					data.append(my_tup)
-			# print directories
 
+			# if we able to find something inside this data than go display it.
 			if len(data) > 0:
+
+				# Delete all the previews data.
 				for i in self.tree.tree.get_children():
 					self.tree.tree.delete(i)
 					self.tree.visual_drag.delete(i)
+
+				# Insert the new data.
 				self.tree.insert_items(data)
+
+				# Set the color for directories.
 				for i in self.tree.tree.get_children():
 					dir_name = self.tree.tree.item(i, "text")
 					if dir_name in directories:
@@ -5362,8 +5609,6 @@ class StructExplorer(Explorer):
 				self.current_directory = self.directory_queue.pop()
 				self.entry_directory.delete(0, tk.END)
 				self.entry_directory.insert(0, self.current_directory)
-			# for i in self.tree.tree.get_children():
-			#	self.tree.tree.delete(i)
 
 	def GetDBPointer(self, path, not_case_sensitive=False, return_none_on_bad_path=False):
 		'''
@@ -5396,35 +5641,50 @@ class StructExplorer(Explorer):
 		struct_type = pMftExp['|properties|'][2]
 		try:
 			struct = obj.Object(struct_type, struct_addr, self.sa_self.kaddr_space)
+
+			# Check if this struct specified address is in the physical layer (usually came from scan plugin that scan the physical layer)
+			if not struct or not struct.is_valid():
+				struct = obj.Object(struct_addr, struct_type, self.sa_self.kaddr_space.physical_space(), native_vm=self.sa_self.kaddr_space)
+				if not struct or not struct.is_valid():
+					struct = obj.Object(struct_addr, struct_type, self.sa_self.kaddr_space)
+
 			self.sa_self.parser(struct, 0, 3, s, pMftExp)
-		except:
+		except Exception:
 			pass # Unable to parse some object
 		return to_return
-
 
 class PopUp(tk.Toplevel):
 	def __init__(self, options, func_to_call, *args, **kwargs):
 		tk.Toplevel.__init__(self, *args, **kwargs)
+
+		# Init variables.
 		self.func_to_call = func_to_call
 		self.options = options
 		self.dict = {}
 		self.opts = {}
+
+		# Add all the options to the toplevel.
 		for item in options:
 			self.dict[item] = ttk.Entry(self)
 			ttk.Label(self, text=item, wraplength=500).pack(fill='x')
 			self.dict[item].insert(10, options[item])
 			self.dict[item].pack(fill='x')
 
+		# Create and pack the button
 		self.save_button = ttk.Button(self, text="<- Save & Continue ->", command=self.Save)
-		self.save_button.pack(side=tk.BOTTOM)#side=tk.LEFT)
-
-	def EnterSet(self, event):
-		return
+		self.save_button.pack(side=tk.BOTTOM)
 
 	def Save(self):
+		'''
+		This function handle click on the save button.
+		:return: None , call the self.func_to_vall(self.opts
+		'''
+
+		# Go all over the options and get the data from the textboxs.
 		for item in self.options:
 			self.opts[item] = self.dict[item].get()
-		#print self.opts
+
+		# Call the function (that should use the arguments)
 		self.func_to_call(self.opts)
 		self.done = True
 
@@ -5434,12 +5694,20 @@ class MessagePopUp(tk.Toplevel):
 	'''
 	def __init__(self, string_to_show, seconds_to_show=5, related=None, title='Informational', *args, **kwargs):
 		tk.Toplevel.__init__(self, *args, **kwargs)
+		
+		# Set the title.
 		self.title(title)
+		
+		# Set the place of this funciton in the screen (if related is specify)
 		if related:
 			x = related.winfo_x()
 			y = related.winfo_y()
 			self.geometry("+%d+%d" % (x + ABS_X+150, y + ABS_Y+150))
+			
+		# Create and pack the label with the information (string_to_show).
 		ttk.Label(self, text=string_to_show).pack(side=tk.LEFT)
+		
+		# Destroyd after seconds_to_show.
 		self.after(int(seconds_to_show*1000), self.destroy)
 
 class Options(Frame):
@@ -5594,6 +5862,11 @@ class Options(Frame):
 		#self.grab_set()
 
 	def get_dir(self, item):
+		'''
+		Ask for directory using tkFileDialog and set it to the item textbox.
+		:param item: textbox item
+		:return: None
+		'''
 		selected = tkFileDialog.askdirectory()
 		if selected and selected != '':
 			self.options[item] = selected
@@ -5601,6 +5874,11 @@ class Options(Frame):
 			self.dict[item].insert(10, self.options[item])
 
 	def get_file(self, item):
+		'''
+		Ask for file using tkFileDialog and set it to the item textbox.
+		:param item: textbox item
+		:return: None
+		'''
 		selected = tkFileDialog.askopenfilename()
 		if selected and selected != '':
 			self.options[item] = selected
@@ -5608,8 +5886,12 @@ class Options(Frame):
 			self.dict[item].insert(10, self.options[item])
 
 	def Save(self):
-		# Check arguments and return if they good.
+		'''
+		Check arguments and return if they good.
+		:return: None
+		'''
 
+		# Get all the data from the textboxes.
 		for data in self.data_order:
 			self.options[data] = self.dict[data].get()
 
@@ -5618,6 +5900,7 @@ class Options(Frame):
 
 		my_arguments = self.options
 
+		# On the start let the user edit more text box (like dump file and profile).
 		if self.on_start:
 			if os.path.isfile(my_arguments['Saved File']):
 				if my_arguments['Saved File'].endswith('atz'):
@@ -5673,9 +5956,12 @@ class Options(Frame):
 			my_arguments['Volatility File Path'] = os.path.realpath(my_arguments['Volatility File Path'])
 			# self.buttons['Volatility File Path'].configure(foreground="black")
 
+		# Print message if the arguments not good.
 		if bad_args:
 			print '\a'
 			messagebox.showerror("Error", err_msg, parent=self)
+
+		# All the items sets good, set the self.user_dict and destroy the options.
 		else:
 			self.user_dict = self.options
 			self.master.title('Loading Please Wait')
@@ -5687,9 +5973,11 @@ class LoadingButton(tk.Button):
 	The load screen a circle that change color.
 	'''
 	def __init__(self, master, relate, c_button, dont_use_queue=True, *args, **kwargs):
-		#tk.Button.__init__(self, master, height=15, width=15, *args, **kwargs)
-		#c_button.config(command=self.display_running)
+
+		# Init handle to click on the progressbar.
 		c_button.bind("<ButtonRelease-1>", self.display_running)
+
+		# Init Class Variables
 		self.c_button = c_button
 		self.last = 0
 		job_queue.put_alert = self.put_alert
@@ -5699,27 +5987,40 @@ class LoadingButton(tk.Button):
 		self.master = master
 		self.relate = relate
 		self.app = None
-		#threading.Thread(target=self.draw).start()
+
+		# Start to set the progressbar state.
 		self.master.after(500, self.draw)
-		#if self.dont_use_queue:
-		#	self.c_button.master.after(500, self.draw)
 
 	def draw(self):
-
+		'''
+		This function change the progressbar state.
+		:return:
+		'''
 		self.last = (self.last + 8) % 100
-		#queue.put((self.c_button.int_var.set, (self.last,)))
 		self.c_button.int_var.set(self.last)
-		#time.sleep(0.4)
 		self.master.after(500, self.draw)
 
 	def put_alert(self, args):
+		'''
+		This function will wrap the put so everytime we put something we will se that (the progressbar change)
+		:param args: args to put in the queue.
+		:return: None
+		'''
 		self.alert()
 		job_queue.put(args)
 
 	def alert(self):
+		'''
+		Call the function (in a thread) that hange the progressbar state to 5 seconds.
+		:return: None
+		'''
 		threading.Thread(target=self.alert_thread).start()
 
 	def alert_thread(self):
+		'''
+		change the state of the progressbar for 5 seconds.
+		:return: None
+		'''
 		queue.put((self.c_button.config, ({'mode': 'indeterminate', 'style': 'blue.Horizontal.TProgressbar'},)))
 		time.sleep(5)
 		queue.put((self.c_button.config, ({'mode': 'determinate', 'style': 'Horizontal.TProgressbar'},)))
@@ -5777,6 +6078,7 @@ class LoadingButton(tk.Button):
 		self.treetable_done.pack(expand=YES, fill=BOTH)
 		self.pw.add(bot_frame)
 
+		# Pack the data.
 		top_frame.pack(side=TOP, fill=BOTH)
 		bot_frame.pack(side=TOP, fill=BOTH)
 		self.pw.pack(side=TOP, fill=BOTH)
@@ -5831,7 +6133,7 @@ class LoadingScreen(Frame):
 		self.my_frame.pack()
 		self.dont_use_queue=dont_use_queue
 		self.master = master
-		self.canvas = tk.Canvas(master=self.my_frame, width = 500, height = 500)
+		self.canvas = tk.Canvas(master=self.my_frame, width=500, height=500)
 		self.canvas.pack()
 		self.colors = ['snow', 'ghost white', 'white smoke', 'gainsboro', 'floral white', 'old lace',
 	'linen', 'antique white', 'papaya whip', 'blanched almond', 'bisque', 'peach puff',
@@ -5921,13 +6223,20 @@ class LoadingScreen(Frame):
 		self.t.penup()
 		self.t.goto(0,-80)
 		self.t.pendown()
+
+		# Draw the circle.
 		if self.dont_use_queue:
 			self.master.after(500, self.draw)
 
 	def draw(self):
-		try: # if the windows is destroy in one thread but this function is not destroy yet.
+		'''
+		This function keep draw the circle
+		:return:
+		'''
+		# if the windows is destroy in one thread but this function is not destroy yet.
+		try:
 			self.t.pencolor(random.choice(self.colors))
-		except:
+		except tk.TclError:
 			return
 		self.t.circle(100)
 		if self.dont_use_queue:
@@ -5943,14 +6252,15 @@ class NoteBook(ttk.Notebook):
 		self.aMenu = tk.Menu(root, tearoff=0)
 		self.aMenu.add_command(label='Close Tab', command=self.close_tab)
 		self.aMenu.add_command(label='Close All Tabs To The Right', command=self.close_right_tabs)
-		#self.aMenu.add_command(label='Attach To Main', command=self.attach)
+		#self.aMenu.add_command(label='Attach To Main', command=self.attach) # TODO
 		self.bind(right_click_event, self.on_click)
 		self.enable_traversal()
 
-	def add(self, *args, **kwargs):
-		ttk.Notebook.add(self, *args, **kwargs)
-
 	def attach(self):
+		'''
+		This function let the user draganddrop support from one notebook the mainscreen notebook.
+		:return: None
+		'''
 		global root
 		nb = root.NoteBook
 		event = self.aMenu.c_event
@@ -5963,21 +6273,33 @@ class NoteBook(ttk.Notebook):
 		"""
 
 	def close_right_tabs(self):
+		'''
+		Close all the tabs from the right
+		:return:
+		'''
+
 		event = self.aMenu.c_event
+
+		# Try to get the clicked tab (some tkinter version don't support this operation < 8.4)
 		try:
 			clicked_tab = self.tk.call(self._w, "identify", "tab", event.x, event.y)
-		except:
+		except tk.TclError:
 			return # Unsupported Tk Version
+
 		active_tab = self.index(self.select())
 
+		# Make sure that the first tab is never closed.
 		if clicked_tab != 0:
 			self.aMenu.unpost()
 
+		# Go all over the tabs
 		for tab in self.tabs():
 			tab = self.index(tab)
 			if clicked_tab < tab:
+
 				# Check if the selection is a tab or none tab
 				if tab != 0:
+
 					# Move the current tab selection 1 back.
 					if tab == active_tab:
 						self.select(tab - 1)
@@ -5986,14 +6308,22 @@ class NoteBook(ttk.Notebook):
 					print '[-] The first tab cannot be removed'
 
 	def close_tab(self):
+		'''
+		Close a specific tab.
+		:return: None
+		'''
+
 		event = self.aMenu.c_event
+
+		# Try to get the clicked tab (some tkinter version don't support this operation < 8.4)
 		try:
 			clicked_tab = self.tk.call(self._w, "identify", "tab", event.x, event.y)
-		except:
+		except tk.TclError:
 			return # Unsupported Tk Version
+
 		active_tab = self.index(self.select())
 
-		# Check if the selection is a tab or none tab
+		# Check if the selection is not the first tab (a double check).
 		if clicked_tab != 0:
 			self.aMenu.unpost()
 
@@ -6005,15 +6335,28 @@ class NoteBook(ttk.Notebook):
 			print '[-] The first tab cannot be removed'
 
 	def popup(self, event):
+		'''
+		Popup the menu.
+		:param event: event
+		:return: None
+		'''
 		self.aMenu.c_event = event
-		# print dir(aMenu)
 		self.aMenu.tk_popup(event.x_root, event.y_root)
 
 	def on_click(self, event):
+		'''
+		Right click event.
+		:param event: event
+		:return: None
+		'''
+		
+		# Try to get the clicked tab (some tkinter version don't support this operation < 8.4)
 		try:
 			clicked_tab = self.tk.call(self._w, "identify", "tab", event.x, event.y)
-		except:
+		except tk.TclError:
 			return # Unsupported Tk Version
+		
+		# Popup the menu if a we press on a tab (and not the first one).
 		if clicked_tab != '' and clicked_tab != 0:
 			self.popup(event)
 
@@ -6025,10 +6368,15 @@ class ServicesAll(Frame):
 		Frame.__init__(self, master, *args, **kwargs)
 		data = []
 		headers = ('offset','order','start','pid','service name','display name','type','state','binary')
-		for pid in service_dict:
-			for svc in service_dict[pid]:
-				data.append(svc)#((svc.obj_offset, svc.Order, svc.Start, pid, svc.ServiceName.dereference(), svc.DisplayName.dereference(), svc.Type, svc.State, svc.Binary if str(svc.State)=='SERVICE_RUNNING' else ''))
 
+		# Go all over the service dict and add to the data.
+		for pid in service_dict:
+
+			# Go all over the services inside this pid.
+			for svc in service_dict[pid]:
+				data.append(svc)
+
+		# Create and pack the table.
 		tree = TreeTable(self, headers=headers, data=data, text_by_item=1, resize=resize)
 		tree.tree['height'] = 22 if 22 < len(data) else len(data)
 		tree.pack(expand=YES, fill=BOTH)
@@ -6039,21 +6387,25 @@ class Search(tk.Toplevel):
 	'''
 	def __init__(self, lower_table, main_table, headers, *args, **kwargs):
 		tk.Toplevel.__init__(self, *args, **kwargs)
+
+		# Put it in the right position
 		x = root.winfo_x()
 		y = root.winfo_y()
 		self.geometry("+%d+%d" % (x + ABS_X+444, y + ABS_Y))
+
+		# Init class variables
 		self.headers = headers
 		self.lower_table = lower_table
 		self.main_table = main_table
+
+		# Create and pack the tables.
 		self.search_text = tk.Entry(self)
 		self.search_text.insert(10, 'Search text here')
-		self.search_text.bind("<Return>", self.enter_search)
+		self.search_text.bind("<Return>", self.search)
 		self.search_text.pack(fill='x')
 		self.search_button = tk.Button(self, text="<- Search ->", command=self.search)
-		self.search_button.pack(fill='x')#side=tk.LEFT)
-		data = []
-		self.tree = TreeTable(self, headers=headers, data=data, text_by_item=1, resize=True)
-		self.tree.tree['height'] = 22 if 22 < len(data) else len(data)
+		self.search_button.pack(fill='x')
+		self.tree = TreeTable(self, headers=headers, data=[], text_by_item=1, resize=True)
 		self.tree.pack(expand=YES, fill=BOTH)
 		self.tree.tree.bind("<Return>", self.OnDoubleClick)
 		self.tree.tree.bind("<Double-1>", self.OnDoubleClick)
@@ -6061,40 +6413,53 @@ class Search(tk.Toplevel):
 		self.search_text.focus()
 
 	def focus_in(self, event=None):
+		'''
+		This function handle focus_in event in the textbox and mark the textbox.
+		:param event: None
+		:return: None
+		'''
 		self.search_text.selection_range(0, tk.END)
 
 	def OnDoubleClick(self, event):
+		'''
+		This function go to the double clicked result.
+		:param event: None
+		:return: None.
+		'''
 		# Double click on table header to resize
 		if event and event.y < 25 and event.y > 0:
 			try:
 				if self.tree.tree.identify_region(event.x, event.y) == 'separator':
 					self.tree.resize_col(self.tree.tree.identify_column(event.x))
 				return
-			except:
+			except tk.TclError:
 				return
 		# Double click where no item selected
 		elif len(self.tree.tree.selection()) == 0 :
 			return
 
-		# Open the lower_pane if not open:
-		#if self.lower_table == None:
-		#	self.main_table.show_lower_pane()
-		#	self.lower_table = self.main_table.lower_table
-
-		#global main_table
-		#global help_table
 		global root
 
 		item = self.tree.tree.selection()[0]
 		selected_pid = int(self.tree.tree.item(item,"text"))
+
+		# Get all the items from the processes tables
 		for row in self.main_table.get_all_children(self.main_table.tree):
 			row = row[0]
+
+			# check that the item is valid.
 			if self.main_table.tree.item(row).has_key('values'):
+
+				# Check if this item is the selected pid (to go to).
 				if int(self.main_table.tree.item(row)['values'][self.main_table.text_by_item]) == selected_pid:
+
+					# Select the right process and open the lower pane.
 					self.main_table.tree.focus(row)
 					self.main_table.tree.selection_set(row)
 					self.main_table.tree.see(row)
 					root.lift()
+
+					# Go to the specific dll (if this is dll).
 					if self.tree.tree.item(item)['values'][2] == "DLL":
 						self.main_table.show_lower_pane("Dlls")
 						self.lower_table = self.main_table.lower_table
@@ -6103,6 +6468,8 @@ class Search(tk.Toplevel):
 								self.lower_table.dlls_table.tree.focus(ht_row)
 								self.lower_table.dlls_table.tree.selection_set(ht_row)
 								self.lower_table.dlls_table.tree.see(ht_row)
+
+					# Go to the specific handle (if this is handle).
 					else:
 						self.main_table.show_lower_pane("Handles")
 						self.lower_table = self.main_table.lower_table
@@ -6113,10 +6480,12 @@ class Search(tk.Toplevel):
 								self.lower_table.handles_table.tree.see(ht_row)
 					break
 
-	def enter_search(self, event):
-		self.search()
-
-	def search(self):
+	def search(self, event=None):
+		'''
+		Serach for the specifig item inside the process_handles and process_dlls.
+		:param event: None
+		:return: None
+		'''
 		global process_dlls
 		global process_handles
 		global process_bases
@@ -6160,15 +6529,13 @@ class CmdPlugin(tk.Toplevel):
 		tk.Toplevel.__init__(self, *args, **kwargs)
 		self.headers = ('Result',)
 
-		#file_path = urllib.url2pathname(volself._config.location[7:])#'"{}"'.format(volself._config.opts['location'].replace('file:///', '').replace('%20', ' ').replace('/', '\\'))
-		#profile = volself._config.opts['profile']
-		#self.default_plugin = r'{} {} --plugins={} -f {} --profile={} {}'.format(sys.executable, sys.argv[0], all_plugins[0], file_path, profile, plugin_name)
-
-		# Volatility (not memtriage)
+		# Set the self.default_plugin according to if this is running under memtriage/volatility.
 		if profile and file_path:
 			self.default_plugin = r'"{}" "{}" --plugins="{}" -f "{}" --profile={} {}'.format(sys.executable, vol_path, plugins_path, file_path, profile, plugin_name)
 		else:
 			self.default_plugin = r'"{}" "{}" --plugins={}'.format(sys.executable, vol_path, plugin_name)
+			
+		# Init and pack all the class gui, with tooltips.
 		self.search_text = tk.Entry(self)
 		self.search_text.insert(10, self.default_plugin)
 		self.search_text.xview_moveto(1)
@@ -6198,6 +6565,11 @@ class CmdPlugin(tk.Toplevel):
 		self.tree.pack(expand=YES, fill=BOTH)
 
 	def apply(self, event):
+		'''
+		This funciton handle apply button press, its apply the data to the specific process propeties.
+		:param event: 
+		:return: 
+		'''
 		global plugins_output
 
 		apply_header = tkSimpleDialog.askstring(title="Apply Header", prompt="Please enter the tab name for this appliance:", parent=self)
@@ -6245,7 +6617,15 @@ class CmdPlugin(tk.Toplevel):
 		# Alert all the processes that have new tabs if the user want to (checkbox state is selected)
 		if self.cb.state() == ('selected',):
 			main_table.set_processes_alert(pid_list)
+
 	def run(self, event):
+		'''
+		Call a thread to run the plugin.
+		:param event: None
+		:return: None
+		'''
+
+		# Validate that no other plugin is running and if so alert the user and exit.
 		if self.running:
 			queue.put((messagebox.showinfo, ("Informational", "There is already an running plugin...", ('**kwargs', {'parent': self}))))
 			return
@@ -6256,12 +6636,22 @@ class CmdPlugin(tk.Toplevel):
 		t.start()
 
 	def clear(self, event):
+		'''
+		Clear the screen from all the previews results.
+		:param event: None
+		:return: None
+		'''
+
+		# Delete all the rows.
 		for i in self.tree.tree.get_children():
 			self.tree.tree.delete(i)
 			self.tree.visual_drag.delete(i)
 
 	def insert_item_thread(self):
-
+		'''
+		This function run the plugin and append the result.
+		:return: None
+		'''
 		if self.default_plugin == '':
 			return
 		print '[+] run:', self.default_plugin
@@ -6272,12 +6662,11 @@ class CmdPlugin(tk.Toplevel):
 
 		try:
 			output = subprocess.check_output(self.default_plugin)
-		except:
-			output = subprocess.Popen([self.default_plugin],
-			                        shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-			                        stderr=subprocess.PIPE)
+		except (subprocess.CalledProcessError, OSError, EOFError):
+			output = subprocess.Popen([self.default_plugin], shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 			output = output.communicate()[0]
 		self.running = False
+
 		# Validate output.
 		if 'ERROR' in output:
 			queue.put((messagebox.showerror, ("Error", "This plugin failed in runtime with this error:\n{}".format(output), ('**kwargs', {'parent': self}))))
@@ -6292,7 +6681,7 @@ class CmdPlugin(tk.Toplevel):
 		def try_insert_data():
 			try:
 				self.tree.insert_items(self.data)
-			except:
+			except tk.TclError:
 				messagebox.showinfo('Plugin Finish Running', 'You exit the CmdPlugin window but you can still view the output in your shell.')
 		queue.put((try_insert_data, ()))
 		job_queue.put_alert((id, 'Run Cmd Plugin', self.default_plugin, 'Done'))
@@ -6303,15 +6692,19 @@ class About(tk.Toplevel):
 	'''
 	def __init__(self, img, *args, **kwargs):
 		tk.Toplevel.__init__(self, *args, **kwargs)
+		
+		# Place the toplevel in the screen, set a title and make it not resizeable.
 		x = root.winfo_x()
 		y = root.winfo_y()
 		self.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 		self.title("About Volatility Explorer")
 		self.resizable(False, False)
 
+		# Create the image and data frames.
 		image_frame = ttk.Frame(self)
 		about_frame = ttk.Frame(self)
 
+		# Insert all the data to the toplevel and pack it.
 		ttk.Label(image_frame, image=img).pack()
 		ttk.Label(about_frame, text="Volatility Explorer\nCreator: Aviel Zohar\nContact: memoryforensicsanalysis@gmail.com", compound=tk.CENTER).pack(side=TOP)
 		git_link = ttk.Label(about_frame, text="Go To Github", foreground='blue', compound=tk.CENTER)
@@ -6319,7 +6712,6 @@ class About(tk.Toplevel):
 		git_link.bind("<Button-1>", lambda e: open_new(r"https://github.com/memoryforensics1/VolExp"))
 		git_link.pack(side=TOP)
 		ttk.Label(about_frame, text=CREDITS, compound=tk.CENTER).pack(side=BOTTOM)
-
 		image_frame.pack(side=LEFT)
 		about_frame.pack(side=LEFT)
 
@@ -6328,28 +6720,36 @@ class ToolTip(object):
 	the square that apeare when we on widget.
 	'''
 	def __init__(self, widget, text='help message'):
+		# Init Class Variables.
 		self.widget = widget
 		self.text = text
-		self.widget.bind("<Enter>", self.showtip)
-		self.widget.bind("<Leave>", self.hidetip)
-		self.widget.bind("<Button-1>", self.hidetip)
-		#self.event = event
 		self.tipwindow = None
 		self.id = None
 		self.x = self.y = 0
 
+		# Event Binding.
+		self.widget.bind("<Enter>", self.showtip)
+		self.widget.bind("<Leave>", self.hidetip)
+		self.widget.bind("<Button-1>", self.hidetip)
+
+
 	def showtip(self, event=None):
-		"Display text in tooltip window"
+		'''
+		Display text in tooltip window (on Enter).
+		:param event: None
+		:return: None
+		'''
 		self.event = event
 		if self.tipwindow or not self.text:
 			return
 
-		x, y, cx, cy = self.event.x, self.event.y, self.event.x, self.event.y#self.widget.bbox("insert")
-
+		# Place the tooltip.
+		x, y, cx, cy = self.event.x, self.event.y, self.event.x, self.event.y
 		x = x + self.widget.winfo_rootx()+10
 		y = cy + self.widget.winfo_rooty()+10
 		self.tipwindow = tw = tk.Toplevel()
 
+		# Put the text and pack the tooltip.
 		tw.wm_overrideredirect(1)
 		tw.wm_geometry("+%d+%d" % (x, y))
 		label = tk.Label(tw, text=self.text, justify=LEFT,
@@ -6358,8 +6758,15 @@ class ToolTip(object):
 		label.pack(ipadx=1)
 
 	def hidetip(self, event=None):
+		'''
+		Hide the tip (on leave).
+		:param event: None
+		:return: None
+		'''
 		tw = self.tipwindow
 		self.tipwindow = None
+
+		# Destroy the tooltip if exist.
 		if tw:
 			tw.destroy()
 
@@ -6375,16 +6782,21 @@ class TreeToolTip(object):
 		self.x = self.y = 0
 
 	def showtip(self, text):
-		"Display text in tooltip window"
+		'''
+		Display text in tooltip window (on Enter).
+		:param text: text to display
+		:return: None
+		'''
+
 		self.text = text
 		if self.tipwindow or not self.text:
 			return
+
+		# Place and pack the tooltip.
 		x, y, cx, cy = self.event.x, self.event.y, self.event.x, self.event.y#self.widget.bbox("insert")
-		#print "shotip", x, y, cx, cy
 		x = x + self.widget.winfo_rootx()+10# + 57#self.widget.x_root + 57
 		y = cy + self.widget.winfo_rooty()+10# +27# find the real one.self.widget.y_root + 27
 		self.tipwindow = tw = tk.Toplevel()
-
 		tw.wm_overrideredirect(1)
 		tw.wm_geometry("+%d+%d" % (x, y))
 		label = tk.Label(tw, text=self.text, justify=LEFT,
@@ -6393,13 +6805,17 @@ class TreeToolTip(object):
 		label.pack(ipadx=1)
 
 	def hidetip(self):
+		'''
+		Hide the tip (on leave).
+		:return: None
+		'''
 		tw = self.tipwindow
 		self.tipwindow = None
 		if tw:
 			tw.destroy()
 
-class Drag_and_Drop_Listbox(tk.Listbox):
-	""" A tk listbox with drag'n'drop reordering of entries. """
+class DragAndDropListbox(tk.Listbox):
+	''' A tk listbox with drag'n'drop reordering of entries. '''
 	def __init__(self, master, **kw):
 		kw['selectmode'] = tk.MULTIPLE
 		kw['activestyle'] = 'none'
@@ -6409,13 +6825,16 @@ class Drag_and_Drop_Listbox(tk.Listbox):
 		self.bind('<B1-Motion>', self.shiftSelection)
 		self.curIndex = None
 		self.curState = None
+
 	def setCurrent(self, event):
 		''' gets the current index of the clicked item in the listbox '''
 		self.curIndex = self.nearest(event.y)
+
 	def getState(self, event):
 		''' checks if the clicked item in listbox is selected '''
 		i = self.nearest(event.y)
 		self.curState = self.selection_includes(i)
+
 	def shiftSelection(self, event):
 		''' shifts item up or down in listbox '''
 		i = self.nearest(event.y)
@@ -6458,7 +6877,7 @@ class MoveLists(tk.Toplevel):
 		frame3 = Frame(frame)
 		frame4 = Frame(frame2)
 
-		self.tree1 = Drag_and_Drop_Listbox(frame3)
+		self.tree1 = DragAndDropListbox(frame3)
 		self.tree1.bind("<ButtonRelease-1>", self.update_table)
 
 		self.tree2 = tk.Listbox(frame4, selectmode=tk.MULTIPLE)
@@ -6492,9 +6911,19 @@ class MoveLists(tk.Toplevel):
 		frame2.pack(side=tk.RIGHT)
 
 	def update_table(self, event=None):
+		'''
+		Call the self.func to update the table.
+		:param event: None
+		:return: None
+		'''
 		self.func(None, self.tree1.get(0, END))
 
 	def move_table(self, event=None):
+		'''
+		Move item from one table to another.
+		:param event: None
+		:return: None
+		'''
 		for select in self.tree1.curselection():
 			item_text = self.tree1.get(select)
 			self.tree2.insert(END, item_text)
@@ -6513,7 +6942,7 @@ class TreeTable(Frame):
 	'''
 	treeview like with much more functionality (look like .Net treeview)
 	'''
-	def __init__(self, master, headers, data, name=None, text_by_item=0, resize=False, display=None, progressbar=False, folder_by_item=None, folder_text="?/?", text_popup=True, resizeable=True, global_preference='TreeTable_CULUMNS'):
+	def __init__(self, master, headers, data, name=None, text_by_item=0, resize=False, display=None, disable_header_replace=600 ,folder_by_item=None, folder_text="?/?", text_popup=True, resizeable=True, global_preference='TreeTable_CULUMNS'):
 		"""
 		master: where to put the treetable.
 		header: the columns headers.
@@ -6521,40 +6950,62 @@ class TreeTable(Frame):
 		text_by_item: the text header of every line (the index in the data in every line).
 		resize: True to resize(when the table created or items added).
 		display: gets a tuple of all the items to display(from the headers) and display them as default.
-		progressbar: create a progressbar while waiting...
-		folder_by_item and folder_item used for create a treetable that have foldered some items.
+		disable_header_replace: sometime we want to disable header (because its slow), so we can give a number of rows or just true. [cant be disable on foldered tree]
+		folder_by_item and folder_item used for create a treetable that have foldered some items.n
 		folder_by_item: get the item to be the search for the folder_text in the data specific line.
-		folder_text will be the text in the item index to split the items with and go inside the folder tree.
+		folder_text: will be the text in the item index to split the items with and go inside the folder tree.
+		text_popup: True to enable popup for text when mouse in on some item.
+		resizeable: True to resize the table automaticly.
+		global_preference: the name for the global variable to put user preference (False/None to disable).
 		"""
 		Frame.__init__(self, master, name=name)
+
+		# Init Class Variables
 		self.master = master
-		self.progressbar=progressbar
-		#self.start_time = time.time()
 		self.resize = resize
+		self.text_popup = text_popup
 		self.text_by_item = text_by_item
+		self.disable_header_replace = disable_header_replace
 		self.row_search = ('', 0)
 		self.last_seperator_time = 0
 		self.swapped = False
 		self.current_x = 0
-		#: column headers
 		self.headers = headers
-		#: table data
 		self.data = data
 		self.folder_by_item = folder_by_item
 		self.folder_text = folder_text
 		self.app_header = None
+
+		# Check if the user put a limit to the header replace (default is 600).
+		if disable_header_replace:
+			try:
+				disable_header_replace = int(disable_header_replace)
+				self.disable_header_replace = len(data) > disable_header_replace
+			except (TypeError, ValueError):
+				self.disable_header_replace = False
+
 		#: :class:`~ttk.Treeview` that only shows "headings" not "tree columns"
+		# if the folder_by_item is not null we will go and create a treeview with tree, and seperate them (go deep when folder_text found).
+		# for example (('item', 'abc', 'abcd'), ('?/?item2', 'abc', 'abcd'), ('?/?item3', 'abc', 'abcd'), ('?/??/?item4', 'abc', 'abcde'), ('item5', 'abc', 'abcdf'))
+		# will create the following tree:
+		# | header1 | header2 | header3 |
+		# -------------------------------
+		# | item1   | abc     | abcd    |
+		# | -item2  | abc     | abcd    | item2 will be sub item of item 1
+		# | -item3  | abc     | abcd    | item3 will be sub item of item 1 as well
+		# | --item4 | abc     | abcde   | item4 will be sub item of item 3
+		# | item5   | abc     | abcdf   | item5 dont have any ?/? so he will not be sub item
 		if self.folder_by_item != None:
-			self.tree = Treeview(self, columns=self.headers, name='tabletree')#, show="headings"
+			self.tree = Treeview(self, columns=self.headers, name='tabletree')
 			self.tree.heading("#0", text="{} [Total:{}]".format(self.headers[self.folder_by_item], len(data)))
-			self.visual_drag = Treeview(self, columns=self.headers, name='visual_drag', show="headings")
 			self.tree["displaycolumns"] = self.headers[:folder_by_item]+self.headers[folder_by_item+1:]
+			self.visual_drag = Treeview(self, columns=self.headers, name='visual_drag', show="headings")
 			self.visual_drag["displaycolumns"] = self.headers[:folder_by_item] + self.headers[folder_by_item + 1:]
 		else:
 			self.tree = Treeview(self, columns=self.headers, name='tabletree', show="headings")
 			self.visual_drag = Treeview(self, columns=self.headers, name='visual_drag', show="headings")
 
-
+		# Save the user preference for the display columns (this will override the display if its enable).
 		if global_preference:
 			if not globals().has_key(global_preference):
 				globals()[global_preference] = {}
@@ -6565,6 +7016,7 @@ class TreeTable(Frame):
 		self.display = globals()[self.global_preference][str(self.headers)] if globals()[self.global_preference].has_key(str(self.headers)) else self.display
 		self.tree["displaycolumns"] = self.display
 		self.visual_drag["displaycolumns"] = self.display
+
 		#: vertical scrollbar
 		self.yscroll = Scrollbar(self, orient="vertical",
 								 command=self.tree.yview, name='table_yscroll')
@@ -6573,17 +7025,25 @@ class TreeTable(Frame):
 								 command=self.tree.xview, name='table_xscroll')
 		self.tree['yscrollcommand'] = self.yscroll.set  # bind to scrollbars
 		self.tree['xscrollcommand'] = self.xscroll.set
-		# position widgets and set resize behavior
+
+		# position widgets and set resize behavior.
 		self.tree.grid(column=0, row=0, sticky=(N + E + W + S))
 		self.yscroll.grid(column=1, row=0, sticky=(N + S))
 		self.xscroll.grid(column=0, row=1, sticky=(E + W))
 		self.grid_columnconfigure(0, weight=1)
 		self.grid_rowconfigure(0, weight=1)
+
+		# Insert all the items and init the title row callbacks (for filtering).
 		self._init_title_row_callback()
 		self._init_insert_items()
-		if len(self.tree.get_children()) > 0 :
+		if len(self.tree.get_children()) > 0:
 			self.tree.focus(self.tree.get_children()[0])
 
+		# Set original order to the items (so ctrl+t will restore to default).
+		self.original_order = self.get_all_children(self.tree)
+		#self.original_order = sorted(self.original_order, key=lambda x: int(str(x[1][0] if isinstance(x[1], tuple) else x[0])[1:], 16))
+		
+		# Menu creation.
 		self.aMenu = Menu(master, tearoff=0)
 		self.HeaderMenu = Menu(master, tearoff=0)
 		self.HeaderMenu.add_command(label='Select Columns...', command=self.header_selected)
@@ -6591,6 +7051,9 @@ class TreeTable(Frame):
 		self.HeaderMenu.add_separator()
 		self.HeaderMenu.add_command(label='Hide Column', command=self.hide_selected_col)
 		self.HeaderMenu.add_separator()
+		if has_csv:
+			self.HeaderMenu.add_command(label='Export Table To Csv', command=self.export_table_csv)
+			self.HeaderMenu.add_separator()
 		if resizeable:
 			self.HeaderMenu.add_command(label='Resize Column', command=self.resize_selected_col)
 			self.HeaderMenu.add_command(label='Resize All Columns', command=self.resize_all_columns)
@@ -6607,6 +7070,7 @@ class TreeTable(Frame):
 		self.aMenu.add_cascade(label='Write', menu=self.write_menu)
 		"""
 
+		# Binding keys.
 		self.tree.bind('<KeyPress>', self.allKeyboardEvent if self.folder_by_item is None else self.allKeyboardEventTree)
 		self.tree.bind("<Double-1>", self.OnDoubleClick)
 		self.tree.bind(right_click_event, self.popup)
@@ -6614,78 +7078,123 @@ class TreeTable(Frame):
 		self.tree.bind('<Control-C>', self.header_selected)
 		self.tree.bind('<Control-t>', self.show_original_order)
 		self.tree.bind('<Control-T>', self.show_original_order)
-		#self.original_order = [get_item_num(num) for num in xrange(1,len(self.data)+1)]  # [(self.tree.set(child[0], self.headers[self.text_by_item]), child) for child in self.get_all_children(self.tree)]
-		self.original_order = [child for child in self.get_all_children(self.tree)]
-		self.original_order = sorted(self.original_order, key=lambda x: int(str(x[1][0] if isinstance(x[1], tuple) else x[0])[1:], 16))
-		if text_popup:
-			self.tree.bind('<Motion>', self.OnMotion)
+
+		# header press and release (if disable header replace is disable we still enable them but without the animation).
 		self.tree.bind("<ButtonPress-1>", self.bDown)
 		self.tree.bind("<ButtonRelease-1>", self.bUp)
-		self.tree.bind("<<TreeviewOpen>>", self.open_virtual_tree)
-		self.tree.bind("<<TreeviewClose>>", self.close_virtual_tree)
-		self.tree.bind("<<TreeviewSelect>>", self.set_item)
+		self.tree.bind('<Motion>', self.OnMotion)
+
+		# This binding relevent only if there is virtual drag
+		if not self.disable_header_replace:
+			self.tree.bind("<<TreeviewOpen>>", self.open_virtual_tree)
+			self.tree.bind("<<TreeviewClose>>", self.close_virtual_tree)
+			self.tree.bind("<<TreeviewSelect>>", self.set_item)
 
 	def _init_insert_items(self):
+		'''
+		This function insert item to the table (wheter is a regular table or a treetable).
+		:return: None
+		'''
 
 		# check if this is folder tree (To make if faster there is big if on the top instead of inside, what makes this kind of duplicated code)
 		if self.folder_by_item !=None:
+
+			# Parent dics for the tree
 			self.parents_dict = {}
-			self.v_parents_dict = {}
+
 			# the iteretion with resize
 			if self.resize:
-				for item in self.data:
-					try:
+
+				# If the user want the header replace drag and drop support.
+				if not self.disable_header_replace:
+
+					self.v_parents_dict = {}
+
+					# Go all over the data.
+					for item in self.data:
+						item = [str(c_item).replace('{', r'\{').decode('utf-8',errors='ignore') for c_item in item]
 						c_tag = re.sub('[^\S0-9a-zA-Z]', '_', item[self.text_by_item])
 						foldered = item[self.folder_by_item].count(self.folder_text)
-						item = list(item)
 						item[self.folder_by_item] = item[self.folder_by_item].replace(self.folder_text, "")
-						#print foldered, item
+
+						# If this item sun of no one.
+						if not foldered or not self.parents_dict.has_key(foldered-1):
+							self.parents_dict[foldered] = self.tree.insert('', END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
+							self.v_parents_dict[foldered] = self.visual_drag.insert('', END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
+						else:
+							self.parents_dict[foldered] = self.tree.insert(self.parents_dict[foldered-1], END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
+							self.v_parents_dict[foldered] = self.visual_drag.insert(self.v_parents_dict[foldered - 1], END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
+
+						# adjust column's width if necessary to fit each value
+						for idx, val in enumerate(item):
+							col_width = tkFont.Font().measure(val)
+							# option can be specified at least 3 ways: as (a) width=None,
+							# (b) option='width' or (c) 'width', where 'width' can be any
+							# valid column option.
+							if self.tree.column(self.headers[idx], 'width') < col_width:
+								self.tree.column(self.headers[idx], width=col_width)
+								self.visual_drag.column(self.headers[idx], width=col_width)
+				else:
+					# Go all over the data.
+					for item in self.data:
+						item = [str(c_item).replace('{', r'\{').replace('}', r'\}').decode('utf-8',errors='ignore') for c_item in item]
+						c_tag = re.sub('[^\S0-9a-zA-Z]', '_', item[self.text_by_item])
+						foldered = item[self.folder_by_item].count(self.folder_text)
+						item[self.folder_by_item] = item[self.folder_by_item].replace(self.folder_text, "")
+
+						# If this item sun of no one.
+						if not foldered or not self.parents_dict.has_key(foldered-1):
+							self.parents_dict[foldered] = self.tree.insert('', END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
+						else:
+							self.parents_dict[foldered] = self.tree.insert(self.parents_dict[foldered - 1], END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
+
+						# adjust column's width if necessary to fit each value
+						for idx, val in enumerate(item):
+							col_width = tkFont.Font().measure(val)
+							# option can be specified at least 3 ways: as (a) width=None,
+							# (b) option='width' or (c) 'width', where 'width' can be any
+							# valid column option.
+							if self.tree.column(self.headers[idx], 'width') < col_width:
+								self.tree.column(self.headers[idx], width=col_width)
+
+			# No resize.
+			else:
+
+				# If the user want the header replace drag and drop support.
+				if not self.disable_header_replace:
+
+					self.v_parents_dict = {}
+
+					# Go all over the data and insert the items.
+					for item in self.data:
+						item = [str(c_item).replace('{', r'\{').decode('utf-8',errors='ignore') for c_item in item]
+						c_tag = re.sub('[^\S0-9a-zA-Z]', '_', item[self.text_by_item])
+						foldered = item[self.folder_by_item].count(self.folder_text)
+						item[self.folder_by_item] = item[self.folder_by_item].replace(self.folder_text, "")
+
+						# If this item sun of no one.
 						if not foldered:
-							self.parents_dict[foldered] = self.tree.insert('', END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)#, text=item[self.folder_by_item]
-							self.v_parents_dict[foldered] = self.visual_drag.insert('', END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)  # , text=item[self.folder_by_item]
+							self.parents_dict[foldered] = self.tree.insert('', END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
+							self.v_parents_dict[foldered] = self.visual_drag.insert('', END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
 						elif self.parents_dict.has_key(foldered-1):
 							self.parents_dict[foldered] = self.tree.insert(self.parents_dict[foldered-1], END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
 							self.v_parents_dict[foldered] = self.visual_drag.insert(self.v_parents_dict[foldered - 1], END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
-					except Exception as ex:
-						print ex
-						try:
-							self.tree.insert('', END, values=item, text=item[self.folder_by_item])
-							self.visual_drag.insert('', END, values=item, text=item[self.folder_by_item])
-						except:
-							print '[-] failed to insert {} to the table'.format(item[self.folder_by_item])
+				else:
 
-
-					# adjust column's width if necessary to fit each value
-					for idx, val in enumerate(item):
-						col_width = tkFont.Font().measure(val)
-						# option can be specified at least 3 ways: as (a) width=None,
-						# (b) option='width' or (c) 'width', where 'width' can be any
-						# valid column option.
-						if self.tree.column(self.headers[idx], 'width') < col_width:
-							self.tree.column(self.headers[idx], width=col_width)
-							self.visual_drag.column(self.headers[idx], width=col_width)
-
-			else:
-				# no resize option choose:
-				if self.progressbar and len(self.data) > 0:
-					popup, progress_bar, progress_var = create_progress_bar('ProcHex')
-					progress = 0
-					progress_step = float(((100.0 - progress) * 1.0) / len(self.data))
-
-				for item in self.data:
-					try:
+					# Go all over the data and insert the item.s
+					for item in self.data:
+						item = [str(c_item).replace('{', r'\{').replace('}', r'\}').decode('utf-8',errors='ignore') for c_item in item]
 						c_tag = re.sub('[^\S0-9a-zA-Z]', '_', item[self.text_by_item])
-						self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
-						self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
-					except:
-						try:
-							self.tree.insert('', END, values=item, text=item[self.text_by_item])
-							self.visual_drag.insert('', END, values=item, text=item[self.text_by_item])
-						except:
-							print '[-] failed to insert {} to the table'.format(item[self.text_by_item])
-					if self.progressbar:
-						progress += progress_step
-						progress_var.set(progress)
+						foldered = item[self.folder_by_item].count(self.folder_text)
+						item[self.folder_by_item] = item[self.folder_by_item].replace(self.folder_text, "")
+
+						# If this item sun of no one.
+						if not foldered:
+							self.parents_dict[foldered] = self.tree.insert('', END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
+						elif self.parents_dict.has_key(foldered - 1):
+							self.parents_dict[foldered] = self.tree.insert(self.parents_dict[foldered - 1], END, text=str(item[self.folder_by_item]), values=item, tags=c_tag, open=True)
+
+		# No headers table.
 		else:
 			self.insert_items(self.data)
 
@@ -6702,147 +7211,46 @@ class TreeTable(Frame):
 			self.tree.column(col, width=tkFont.Font().measure(col.title()))
 			self.visual_drag.column(col, width=tkFont.Font().measure(col.title()))
 
-	def get_all_children(self, tree, item="", only_opened=True):
-		open_opt = tk.BooleanVar()
-		children = []
-		for child in tree.get_children(item):
-			children.append((child, item))
-			open_opt.set(str(tree.item(child, option='open')))
-			if open_opt.get() or not only_opened:
-				children += self.get_all_children(tree, child, only_opened)
-		return set(children)
-
-	def allKeyboardEvent(self, event):
-		'''
-		This function go to the item key that start with the key pressed by the user
-		like file explorer feature.
-		'''
-		if event.keysym_num > 0 and event.keysym_num < 60000:
-			if len(self.tree.selection()) > 0:
-				item = self.tree.selection()[0]
-			else:
-				item = self.tree.get_children('')[0]
-			clicked_item = item#self.tree.item(item)['values'][self.text_by_item].lower() #fix same name issue
-			if time.time() - self.row_search[1] > 2:
-				self.row_search = ('', self.row_search[1])
-
-			# Check for the same character twice in a row.
-			if len(self.row_search[0]) == 1 and self.row_search[0][0] == event.char.lower():
-				self.row_search = (self.row_search[0][0], time.time())
-			else:
-				self.row_search = ('{}{}'.format(self.row_search[0], event.char.lower()), self.row_search[1])
-			after_selected = False
-
-			# Check all the rows after the current selection.
-			for ht_row in self.tree.get_children():
-				if clicked_item == ht_row:#self.tree.item(ht_row)['values'][self.text_by_item].lower():
-					after_selected = True
-					if time.time() - self.row_search[1] > 2 or len(self.row_search[0]) == 1:
-						continue
-				if not after_selected:
-					continue
-				if (self.tree["displaycolumns"][0] != '#all' and str(self.tree.item(ht_row)['values'][self.headers.index(self.tree["displaycolumns"][0])]).lower().startswith(self.row_search[0])) or str(self.tree.item(ht_row)['values'][self.text_by_item]).lower().startswith(self.row_search[0]):
-					self.tree.focus(ht_row)
-					self.tree.selection_set(ht_row)
-					self.tree.see(ht_row)
-					self.row_search = (self.row_search[0], time.time())
-					return
-
-			# Check all the rows before the current selection.
-			for ht_row in self.tree.get_children():
-				if clicked_item == ht_row:#self.tree.item(ht_row)['values'][self.text_by_item].lower():
-					break
-				if (self.tree["displaycolumns"][0] != '#all' and str(self.tree.item(ht_row)['values'][self.headers.index(self.tree["displaycolumns"][0])]).lower().startswith(self.row_search[0])) or str(self.tree.item(ht_row)['values'][self.text_by_item]).lower().startswith(self.row_search[0]):
-					self.tree.focus(ht_row)
-					self.tree.selection_set(ht_row)
-					self.tree.see(ht_row)
-					self.row_search = (self.row_search[0], time.time())
-					return
-
-			print '\a'
-			self.row_search = ('', 0)
-
-	def allKeyboardEventTree(self, event):
-		'''
-		This function go to the item key that start with the key pressed by the user
-		like file explorer feature.
-		'''
-		if event.keysym_num > 0 and event.keysym_num < 60000:
-			if len(self.tree.selection()) > 0:
-				item = self.tree.selection()[0]
-			else:
-				item = self.tree.get_children('')[0]
-			clicked_item = item  # self.tree.item(item, "text").lower()
-			if time.time() - self.row_search[1] > 2:
-				self.row_search = ('', self.row_search[1])
-
-			# Check for the same character twice in a row.
-			if len(self.row_search[0]) == 1 and self.row_search[0][0] == event.char.lower():
-				self.row_search = (self.row_search[0][0], time.time())
-			else:
-				self.row_search = ('{}{}'.format(self.row_search[0], event.char.lower()), self.row_search[1])
-			after_selected = False
-
-			childrens = list(self.get_all_children(self.tree))  # self.tree.get_children(self.tree.parent(item)) if self.tree.parent(item) else self.tree.get_children()
-			# Check all the rows after the current selection.
-			for ht_row in childrens:  # self.tree.get_children():
-				ht_row = ht_row[0]
-				if clicked_item == ht_row:  # self.tree.item(ht_row, "text").lower():
-					after_selected = True
-					if time.time() - self.row_search[1] > 2 or len(self.row_search[0]) == 1:
-						continue
-				if not after_selected:
-					continue
-				if str(self.tree.item(ht_row)['text']).replace(' ','').lower().startswith(self.row_search[0]):# str(self.tree.item(ht_row)['values'][self.text_by_item]).lower().startswith(self.row_search[0]) or
-					self.tree.focus(ht_row)
-					self.tree.selection_set(ht_row)
-					self.tree.see(ht_row)
-					self.row_search = (self.row_search[0], time.time())
-					return
-
-			# childrens = self.get_items()#self.tree.get_children(self.tree.parent(item)) if self.tree.parent(item) else self.tree.get_children()			childrens2
-			# Check all the rows before the current selection.
-			for ht_row in childrens:
-				ht_row = ht_row[0]
-				if clicked_item == ht_row:  # self.tree.item(ht_row, "text").lower():
-					break
-				if str(self.tree.item(ht_row)['text']).replace(' ','').lower().startswith(self.row_search[0]): #str(self.tree.item(ht_row)['values'][self.text_by_item]).lower().startswith(self.row_search[0]) or
-					self.tree.focus(ht_row)
-					self.tree.selection_set(ht_row)
-					self.tree.see(ht_row)
-					self.row_search = (self.row_search[0], time.time())
-					return
-
-			print '\a'
-			self.row_search = ('', 0)
-
 	def insert_items(self, data):
-
+		'''
+		This function insert the data to the table
+		wrap insert with try except to speedup preformance.
+		:param data: list of tuples (the items to insert)
+		:return: None
+		'''
+		# If resize is enable
 		if self.resize:
-			for item in data:
-				c_tag = re.sub('[^\S0-9a-zA-Z]', '_', str(item[self.text_by_item]))
-				try:
-					self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
-					self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
-				except:
-					# Adjust item index (this should always crush).
+
+			# Create with visual_drag (for drag and drop support on headers).
+			if not self.disable_header_replace:
+				# Go all over the data and insert the items
+				for item in data:
+
+					# Add try except to improve performance
 					try:
+						c_tag = str(item[self.text_by_item])
+						self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
 						self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
-					except:
-						pass
-					# Try to repair
-					try:
-						item = [i.replace('\\', '/') for i in item]
-						self.tree.insert('', END, values=item, text=item[self.text_by_item])
-						self.visual_drag.insert('', END, values=item, text=item[self.text_by_item])
-					except:
-						# Adjust item index (this should always crush).
+					except (Exception, tk.TclError):
+
+						# This will fail as well (so both table will be in the same item count)
 						try:
-							item = [i.replace('\\', '/') for i in item]
-							self.visual_drag.insert('', END, values=item, text=item[self.text_by_item])
-						except:
+							self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+						except (Exception, tk.TclError) as ex:
 							pass
-						print '[-] failed to insert {} to the table'.format(item[self.text_by_item])
+
+						try:
+							item = [str(c_item).replace('{', r'\{').replace('}', r'\}').decode('utf-8',errors='ignore') for c_item in item]
+							c_tag = re.sub('[^\S0-9a-zA-Z]', '_', str(item[self.text_by_item]))
+							self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+							self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+						except tk.TclError:
+							print '[-] Fail to insert {} to the table'.format(item)
+							try:
+								self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+							except tk.TclError:
+								pass
+
 					# adjust column's width if necessary to fit each value
 					for idx, val in enumerate(item):
 						col_width = tkFont.Font().measure(val)
@@ -6852,34 +7260,227 @@ class TreeTable(Frame):
 						if self.tree.column(self.headers[idx], 'width') < col_width:
 							self.tree.column(self.headers[idx], width=col_width)
 							self.visual_drag.column(self.headers[idx], width=col_width)
-		else:
-			for item in data:
-				c_tag = re.sub('[^\S0-9a-zA-Z]', '_', str(item[self.text_by_item]))
-				try:
-					self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
-					self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
-				except:
-					# Adjust item index (this should always crush).
+
+			# there is no visual_drag
+			else:
+				# Go all over the data and insert the items
+				for item in data:
+
+					# Add try except to improve performance
 					try:
-						self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tag=c_tag)
-					except:
-						pass
-					# Try to repair
-					try:
-						item = [i.replace('\\', '/') for i in item]
-						self.tree.insert('', END, values=item, text=item[self.text_by_item])
-						self.visual_drag.insert('', END, values=item, text=item[self.text_by_item])
-					except:
-						# Adjust item index (this should always crush).
+						c_tag = str(item[self.text_by_item])
+						self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+					except (Exception, tk.TclError):
+
 						try:
-							item = [i.replace('\\', '/') for i in item]
-							self.visual_drag.insert('', END, values=item, text=item[self.text_by_item])
-						except:
+							item = [str(c_item).replace('{', r'\{').replace('}', r'\}').decode('utf-8',errors='ignore') for c_item in item]
+							c_tag = re.sub('[^\S0-9a-zA-Z{}]', '_', str(item[self.text_by_item]))
+							self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+						except tk.TclError:
+							print '[-] Fail to insert {} to the table'.format(item)
+
+					# adjust column's width if necessary to fit each value
+					for idx, val in enumerate(item):
+						col_width = tkFont.Font().measure(val)
+						# option can be specified at least 3 ways: as (a) width=None,
+						# (b) option='width' or (c) 'width', where 'width' can be any
+						# valid column option.
+						if self.tree.column(self.headers[idx], 'width') < col_width:
+							self.tree.column(self.headers[idx], width=col_width)
+
+		# If resize is disable.
+		else:
+
+			# Create with visual_drag (for drag and drop support on headers).
+			if not self.disable_header_replace:
+
+				# Go all over the data and insert the items
+				for item in data:
+
+					# Add try except to improve performance
+					try:
+						c_tag = str(item[self.text_by_item])
+						self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+						self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+					except (Exception, tk.TclError):
+
+						# This will fail as well (so both table will be in the same item count)
+						try:
+							self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+						except (Exception, tk.TclError) as ex:
 							pass
-						print '[-] failed to insert {} to the table'.format(item[self.text_by_item])
+
+						try:
+							item = [str(c_item).replace('{', r'\{').replace('}', r'\}').decode('utf-8',errors='ignore') for c_item in item]
+							c_tag = re.sub('[^\S0-9a-zA-Z]', '_', str(item[self.text_by_item]))
+							self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+							self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+						except tk.TclError:
+							print '[-] Fail to insert {} to the table'.format(item)
+							try:
+								self.visual_drag.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+							except tk.TclError:
+								pass
+			else:
+
+				# Go all over the data and insert the items
+				for item in data:
+
+					# Add try except to improve performance
+					try:
+						c_tag = str(item[self.text_by_item])
+						self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+					except (Exception, tk.TclError):
+						try:
+							item = [str(c_item).replace('{', r'\{').replace('}', r'\}').decode('utf-8',errors='ignore') for c_item in item]
+							c_tag = re.sub('[^\S0-9a-zA-Z{}]', '_', str(item[self.text_by_item]))
+							self.tree.insert('', END, values=item, text=item[self.text_by_item], tags=c_tag)
+						except tk.TclError:
+							print '[-] Fail to insert {} to the table'.format(item)
 
 		if len(self.tree.get_children()) > 0:
 			self.tree.focus(self.tree.get_children()[0])
+
+		# Set original order to the items (so ctrl+t will restore to default).
+		self.original_order = self.get_all_children(self.tree)
+
+	def get_all_children(self, tree, item="", only_opened=True):
+		'''
+		This function will return a list of all the children.
+		:param tree: tree to iterate.
+		:param item: from item
+		:param only_opened: go only over the items that nop colaps.
+		:return: list of all the items [(item, parent), (item, parent)]
+		'''
+		open_opt = tk.BooleanVar()
+		children = []
+
+		# Go all over the childrens
+		for child in tree.get_children(item):
+
+			# Append children and parent
+			children.append((child, item))
+			open_opt.set(str(tree.item(child, option='open')))
+
+			# If only opened items is searched
+			if open_opt.get() or not only_opened:
+				children += self.get_all_children(tree, child, only_opened)
+		return children
+
+	def allKeyboardEvent(self, event):
+		'''
+		This function go to the item that start with the key pressed by the user (or word), this function search for the current first columns
+		if column is moved its will update to the new first column.
+		:param event: event
+		:return: None
+		'''
+
+		# Check for valid key
+		if event.keysym_num > 0 and event.keysym_num < 60000:
+
+			# Check if there is any item selected (else select the first one).
+			if len(self.tree.selection()) > 0:
+				item = self.tree.selection()[0]
+			else:
+				item = self.tree.get_children('')[0]
+			clicked_item = item
+
+			# A timer (for types a words and not just a char.
+			if time.time() - self.row_search[1] > 2:
+				self.row_search = ('', self.row_search[1])
+
+			# Check for the same character twice in a row.
+			if len(self.row_search[0]) == 1 and self.row_search[0][0] == event.char.lower():
+				self.row_search = (self.row_search[0][0], time.time())
+			else:
+				self.row_search = ('{}{}'.format(self.row_search[0], event.char.lower()), self.row_search[1])
+			after_selected = False
+
+			# Check all the rows after the current selection.
+			for ht_row in self.tree.get_children():
+				if clicked_item == ht_row:
+					after_selected = True
+					if time.time() - self.row_search[1] > 2 or len(self.row_search[0]) == 1:
+						continue
+				if not after_selected:
+					continue
+				if (self.tree["displaycolumns"][0] != '#all' and str(self.tree.item(ht_row)['values'][self.headers.index(self.tree["displaycolumns"][0])]).lower().startswith(self.row_search[0])) or str(self.tree.item(ht_row)['values'][self.text_by_item]).lower().startswith(self.row_search[0]):
+					self.tree.focus(ht_row)
+					self.tree.selection_set(ht_row)
+					self.tree.see(ht_row)
+					self.row_search = (self.row_search[0], time.time())
+					return
+
+			# Check all the rows before the current selection.
+			for ht_row in self.tree.get_children():
+				if clicked_item == ht_row:
+					break
+				if (self.tree["displaycolumns"][0] != '#all' and str(self.tree.item(ht_row)['values'][self.headers.index(self.tree["displaycolumns"][0])]).lower().startswith(self.row_search[0])) or str(self.tree.item(ht_row)['values'][self.text_by_item]).lower().startswith(self.row_search[0]):
+					self.tree.focus(ht_row)
+					self.tree.selection_set(ht_row)
+					self.tree.see(ht_row)
+					self.row_search = (self.row_search[0], time.time())
+					return
+
+			self.bell()
+			self.row_search = ('', 0)
+
+	def allKeyboardEventTree(self, event):
+		'''
+		This function go to the item that start with the key pressed by the user (or word), this function search for the first only!
+		:param event: event
+		:return: None
+		'''
+
+		# Check for valid key
+		if event.keysym_num > 0 and event.keysym_num < 60000:
+			if len(self.tree.selection()) > 0:
+				item = self.tree.selection()[0]
+			else:
+				item = self.tree.get_children('')[0]
+			clicked_item = item
+			if time.time() - self.row_search[1] > 2:
+				self.row_search = ('', self.row_search[1])
+
+			# Check for the same character twice in a row.
+			if len(self.row_search[0]) == 1 and self.row_search[0][0] == event.char.lower():
+				self.row_search = (self.row_search[0][0], time.time())
+			else:
+				self.row_search = ('{}{}'.format(self.row_search[0], event.char.lower()), self.row_search[1])
+			after_selected = False
+
+			childrens = self.get_all_children(self.tree)
+
+			# Check all the rows after the current selection.
+			for ht_row in childrens:
+				ht_row = ht_row[0]
+				if clicked_item == ht_row:
+					after_selected = True
+					if time.time() - self.row_search[1] > 2 or len(self.row_search[0]) == 1:
+						continue
+				if not after_selected:
+					continue
+				if str(self.tree.item(ht_row)['text']).replace(' ','').lower().startswith(self.row_search[0]):
+					self.tree.focus(ht_row)
+					self.tree.selection_set(ht_row)
+					self.tree.see(ht_row)
+					self.row_search = (self.row_search[0], time.time())
+					return
+
+			# Check all the rows before the current selection.
+			for ht_row in childrens:
+				ht_row = ht_row[0]
+				if clicked_item == ht_row:
+					break
+				if str(self.tree.item(ht_row)['text']).replace(' ','').lower().startswith(self.row_search[0]):
+					self.tree.focus(ht_row)
+					self.tree.selection_set(ht_row)
+					self.tree.see(ht_row)
+					self.row_search = (self.row_search[0], time.time())
+					return
+
+			self.bell()
+			self.row_search = ('', 0)
 
 	def RunCopy(self, cp):
 		'''
@@ -6888,93 +7489,143 @@ class TreeTable(Frame):
 		clip = self.tree
 		row = self.tree.selection()[0]
 		item = self.tree.item(row)
-		#clip.withdraw()
 		clip.clipboard_clear()
 		item_text = item['values'][cp]
 		clip.clipboard_append(str(item_text))
 
 	def OnMotion(self, event):
 		"""
-		Display the label on motion event
+		This function handle mouse motion event, on headers moves by the user (drag and drop support). and the tooltip help.
+		:param event:
+		:return:
 		"""
 
 		# Handle Motion on dnd column.
 		tv = event.widget
+
 		# drag around label if visible
-		# print 'mapped:', self.visual_drag.winfo_ismapped()
 		if self.visual_drag.winfo_ismapped():
 			self.swapped = True
 			self.last_x = float(self.current_x)
 			self.current_x = float(event.x)
 			x = self.dx + event.x
+
 			# middle of the dragged column.
 			xm = int(x + self.visual_drag.column(self.col_from_id, 'width') / 2)
 			self.visual_drag.place_configure(x=x)
 			col = tv.identify_column(xm)
+
 			# if the middle of the dragged column is in another column, swap them
 			if col and tv.column(col, 'id') != self.col_from_id:
 				self.swap(tv, self.col_from_id, col, 'right' if self.current_x - self.last_x > 0 else 'left')
 
-		try:
-			# Create small square with information
-			_iid = self.tree.identify_row(event.y)
-			# If hold on table header
-			if not _iid or not self.tree.identify_column(event.x)[1:]:
+		# Handle tooltip creation
+		if self.text_popup:
+
+			# Problem with tk version (just update the version).
+			try:
+
+				# Create small square with information
+				_iid = self.tree.identify_row(event.y)
+
+				# If hold on table header
+				if not _iid or not self.tree.identify_column(event.x)[1:]:
+					return
+
+				item = self.tree.item(_iid)
+			except tk.TclError:
 				return
 
-			item = self.tree.item(_iid)
-		except:
-			return # Problem with tk version
-		if hasattr(self, "toolTop"):
-			self.toolTop.hidetip()
-		self.toolTop = TreeToolTip(self.tree, event)
+			# Hide the current tooltip (if there is any).
+			if hasattr(self, "toolTop"):
+				self.toolTop.hidetip()
 
-		col = int(self.tree.identify_column(event.x)[1:]) -1 if int(self.tree.identify_column(event.x)[1:]) else 0#int(self.tree.identify_column(event.x)[1:])
-		text_to_show = ""
-		if self.folder_by_item != None:
-			text_to_show = "{}: {}\n".format(self.headers[self.folder_by_item], self.tree.item(_iid)['values'][self.folder_by_item])
-		display = self.tree["displaycolumns"]
-		text_to_show += "{}: {}".format(self.headers[self.text_by_item], self.tree.item(_iid)['values'][self.text_by_item])
-		# If we not on motion on text_by_item column(witch already displayed...).
-		if self.headers[self.text_by_item] not in display or col != display.index(self.headers[self.text_by_item]):#self.text_by_item:
-			text_to_show += u"\n{}: {}".format(display[col], item['values'][self.headers.index(display[col])] if len(item['values']) > self.headers.index(display[col]) else '')
-		self.toolTop.showtip(text_to_show)
-		def leave(event):
-			self.toolTop.hidetip()
-		self.tree.bind('<Leave>', leave)
+			# Create a tooltip.
+			self.toolTop = TreeToolTip(self.tree, event)
+
+			# Find the selected column
+			col = int(self.tree.identify_column(event.x)[1:]) -1 if int(self.tree.identify_column(event.x)[1:]) else 0
+			text_to_show = ""
+
+			# Make sure to add to the foldered tree's the realy first column info as well so they have more information displayed in the tooltip.
+			if self.folder_by_item != None:
+				text_to_show = "{}: {}\n".format(self.headers[self.folder_by_item], self.tree.item(_iid)['values'][self.folder_by_item])
+
+			# Get the selected column (acourding to the current display).
+			display = self.tree["displaycolumns"]
+			text_to_show += "{}: {}".format(self.headers[self.text_by_item], self.tree.item(_iid)['values'][self.text_by_item])
+
+
+			# If we not on motion on text_by_item column(witch already displayed...).
+			if self.headers[self.text_by_item] not in display or col != display.index(self.headers[self.text_by_item]):
+				text_to_show += u"\n{}: {}".format(display[col], item['values'][self.headers.index(display[col])] if len(item['values']) > self.headers.index(display[col]) else '')
+			self.toolTop.showtip(text_to_show)
+
+
+			def leave(event):
+				''' hide the diplayed tooltip '''
+				self.toolTop.hidetip()
+			self.tree.bind('<Leave>', leave)
 
 	def swap(self, tv, col1, col2, direction):
+		'''
+		This function swap 2 columns
+		:param tv: treeview
+		:param col1: col
+		:param col2: col
+		:param direction: direction
+		:return: None
+		'''
 		dcols = list(tv["displaycolumns"])
+
+		# When all the columsn is selected we get #all instead of tuples with the names of the row, so lets replace this.
 		if dcols[0] == "#all":
 			dcols = list(tv["columns"])
+
+		# Get the columns id
 		id1 = self.tree.column(col1, 'id')
 		id2 = self.tree.column(col2, 'id')
+
+		# Return if one of the columns is not valid (the header column for the folder table).
 		if id1 == '' or id2 == '':
 			return
+
+		# Get the index of the ids.
 		i1 = dcols.index(id1)
 		i2 = dcols.index(id2)
+
+		# Return if the columns is not valid (before the first or after the last).
 		if (i1 - i2 > 0 and direction == 'right') or (i1 - i2 < 0 and direction == 'left'):
 			return
+
+		# Swap.
 		dcols[i1] = id2
 		dcols[i2] = id1
+
+		# Display in the new order.
 		tv["displaycolumns"] = dcols
 		self.swapped = True
 
 	def bDown(self, event):
-
+		'''
+		This function handle button down event (when we try replace 2 columns).
+		:param event:
+		:return:
+		'''
 		tv = tree = event.widget
-
 		left_column = tree.identify_column(event.x)
 
+		# Check if this columns is valid (not the header for folder).
 		if left_column[1:] == '':
 			return
 
 		right_column = '#%i' % (int(tree.identify_column(event.x)[1:]) + 1)
 
+		# Get the left index
 		if (not isinstance(left_column, int)) and (not left_column.isdigit()) and (
 				left_column.startswith('I') or left_column.startswith('#')):
 			left_column = int(left_column[1:])
-		left_column -= 1  # col-1 if col!=0 else 0
+		left_column -= 1
 
 		# This is the text header of the treeview(the left column if text header present).
 		if left_column != -1:
@@ -6982,10 +7633,11 @@ class TreeTable(Frame):
 			width_l = tree.column(left_column, 'width')
 			self.visual_drag.column(left_column, width=width_l)
 
+		# Get the right column
 		if (not isinstance(right_column, int)) and (not right_column.isdigit()) and (
 				right_column.startswith('I') or right_column.startswith('#')):
 			right_column = int(right_column[1:])
-		right_column -= 1  # col-1 if col!=0 else 0
+		right_column -= 1
 
 		# This is the text header of the treeview(the left column if text header present).
 		if right_column < len(self.tree["displaycolumns"]):
@@ -6993,20 +7645,26 @@ class TreeTable(Frame):
 			width_r = tree.column(right_column, 'width')
 			self.visual_drag.column(right_column, width=width_r)
 
+		# Problem with tk version minumum support 8.5.
 		try:
 			c_region = tv.identify_region(event.x, event.y)
-		except:
+		except tk.TclError:
 			c_region = 'heading' if event.y < 26 else 'not good tk version'
 
-		if c_region == 'heading':#!= 'separator' and event.y < 26:
+		# Check the user select the header of the table.
+		if c_region == 'heading':
 			self.swapped = False
 			col = tv.identify_column(event.x)
 			self.col_from_id = tv.column(col, 'id')
+
+			# Iterate all the treeview only if we have not disable header replace.
+
+				
 			# get column x coordinate and width
 			if self.col_from_id and self.col_from_id != 0:
-				all_children = self.get_all_children(tv) #list(self.get_all_children(tv))
+				all_children = tv.get_children() #self.get_all_children(tv)
 				for i in all_children:
-					bbox = tv.bbox(i[1][0] if isinstance(i[1], tuple) else i[0], self.col_from_id)
+					bbox = tv.bbox(i, self.col_from_id) #bbox = tv.bbox(i[1][0] if isinstance(i[1], tuple) else i[0], self.col_from_id)
 					if bbox:
 						self.dx = bbox[0] - event.x  # distance between cursor and column left border
 						#        tv.heading(col_from_id, text='')
@@ -7021,48 +7679,63 @@ class TreeTable(Frame):
 							else:
 								self.visual_drag.yview_scroll(scroll, "units")
 
-						self.visual_drag.configure(displaycolumns=[self.col_from_id], yscrollcommand=set_y)
-						self.tree.bind("<MouseWheel>", set_y2)
-						self.visual_drag.place(in_=tv, x=bbox[0], y=0, anchor='nw', width=bbox[2], relheight=1)
-						self.visual_drag.selection_set(tv.selection())
-						self.visual_drag.yview_moveto(self.yscroll.get()[0])
-
-						#print self.visual_drag['xscrollcommand'] , self.tree['xscrollcommand']
+						# Check if we display beautiful header or not
+						if not self.disable_header_replace:
+							self.visual_drag.configure(displaycolumns=[self.col_from_id], yscrollcommand=set_y)
+							self.tree.bind("<MouseWheel>", set_y2)
+							self.visual_drag.place(in_=tv, x=bbox[0], y=0, anchor='nw', width=bbox[2], relheight=1)
+							self.visual_drag.selection_set(tv.selection())
+							self.visual_drag.yview_moveto(self.yscroll.get()[0])
+						else:
+							self.visual_drag.configure(displaycolumns=[self.col_from_id])
+							self.visual_drag.place(in_=tv, x=event.x, y=0, anchor='nw', width=bbox[2], relheight=1)
 						return
+
 		else:
 			self.col_from_id = None
+
+			# Reset the timer (if we select seperator).
 			if c_region == 'separator':
 				self.last_seperator_time = time.time()
 
 	def bUp(self, event):
+		''' This function hide the visual drage when the courser is up'''
 		self.visual_drag.place_forget()
 
 	def open_virtual_tree(self, event):
+		''' This function open the visual_drag when the regulare tree is open'''
 		if len(self.tree.selection()) > 0:
 			self.visual_drag.item(self.tree.selection()[0], open=1)
 
 	def close_virtual_tree(self, event):
+		''' This function close the visual_drag when the regulare tree is close'''
 		if len(self.tree.selection()) > 0:
 			self.visual_drag.item(self.tree.selection()[0], open=0)
 
 	def set_item(self, event):
+		''' This function set the selection item in te visual_drag when the regulare tree is selection is change'''
 		if len(self.tree.selection()) > 0:
 			item = self.tree.selection()[0]
-			self.visual_drag.focus(item)
 			self.visual_drag.selection_set(item)
-			self.visual_drag.see(item)
+			self.tree.focus(item)
 			self.tree.see(item)
 
 	def OnDoubleClick(self, event):
+		''' This function handle double click press (for header resize)'''
 		# Double click on table header to resize
 		if event and event.y < 25 and event.y > 0:
 			try:
 				if self.tree.identify_region(event.x, event.y) == 'separator':
 					self.resize_col(self.tree.identify_column(event.x))
-			except:
+			except tk.TclError:
 				pass # This Tkinter version dont support identify region event.
 
 	def resize_col(self, col):
+		'''
+		This function resize some collumn.
+		:param col: the col to resize (fix size).
+		:return: None
+		'''
 		if (not isinstance(col, int)) and (not col.isdigit()) and (col.startswith('I') or col.startswith('#')):
 			col = int(col[1:])
 		col -= 1#col-1 if col!=0 else 0
@@ -7071,48 +7744,65 @@ class TreeTable(Frame):
 		if col == -1:
 			return
 		col = self.headers.index(self.tree["displaycolumns"][col])
-		max_len = 0#tkFont.Font().measure(str(self.headers[col]))#with the header size
+		max_len = 0
+
+		# Get the beggest line and resize
 		for row in self.get_all_children(self.tree):
 			row = row[0]
 			item = self.tree.item(row)
 			current_len = tkFont.Font().measure(str(item['values'][col]))
 			if current_len > max_len:
 				max_len = current_len
-		self.tree.column(self.headers[col], width=(max_len))#int(max_len*1.4)))
-		self.visual_drag.column(self.headers[col], width=(max_len))#int(max_len*1.4)))
+		self.tree.column(self.headers[col], width=(max_len))
 
-	def update_gui(self, item, values):
-		if type(item) is list:
-			for index in range(len(item)):
-				self.tree.item(item[index], values=values[index])
-		else:
-			self.tree.item(item, values=values)
+		if not self.disable_header_replace:
+			self.visual_drag.column(self.headers[col], width=(max_len))
 
 	def display_only(self, event=None, display=None):
+		''' This function display only the wanted items (and save them)'''
 		self.tree["displaycolumns"] = display if display else self.display
-		self.visual_drag["displaycolumns"] = display if display else self.display
+
+		if not self.disable_header_replace:
+			self.visual_drag["displaycolumns"] = display if display else self.display
+
 		if self.global_preference and display:
 			globals()[self.global_preference][str(self.headers)] = display
 
 	def header_selected(self,event=None):
+		''' This function display the move list for header selected '''
+
 		def on_exit():
+			''' Delete the header app when he die and set to None'''
 			self.app_header.destroy()
 			self.app_header = None
 
+		# If the user select to display the select columns just pop it up (if its exist, else create it).
 		if self.app_header:
 			self.app_header.attributes('-topmost', 1)
 			self.app_header.attributes('-topmost', 0)
 		else:
+
+			# Get the current displayed columns.
 			display = self.tree["displaycolumns"]
+
+			# Get the current hiden columns
 			hide = [item for item in self.headers if item not in self.tree["displaycolumns"]]
+
+			# Remove the first header if this a folder treeview (unsupported).
 			if self.folder_by_item != None:
 				hide.remove(self.headers[self.folder_by_item])
+				
+			# Create the movelists gui.
 			self.app_header = MoveLists(display, hide, self.display_only)
+			x = self.winfo_x()
+			y = self.winfo_y()
+			self.app_header.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
 			self.app_header.resizable(False, False)
 			self.app_header.title("Select Columns")
 			self.app_header.protocol("WM_DELETE_WINDOW", on_exit)
 
 	def hide_selected_col(self):
+		''' This functio handle the hide column header menu function'''
 		display = list(self.tree["displaycolumns"])
 		col = self.tree.identify_column(self.HeaderMenu.c_event.x)
 		if (not isinstance(col, int)) and (not col.isdigit()) and (col.startswith('I') or col.startswith('#')):
@@ -7128,41 +7818,75 @@ class TreeTable(Frame):
 		self.display_only(None, display)
 
 	def resize_selected_col(self):
+		''' This function handle the resize column from the menu of the table header '''
 		self.resize_col(self.tree.identify_column(self.HeaderMenu.c_event.x))
 
 	def resize_all_columns(self):
+		''' This funtion resize all the columns (handle the resize all columns from the menu funciton).'''
 		for col in range(len(self.tree["displaycolumns"])+1):
 			self.resize_col(col)
 
 	def SetColorItem(self, color, item=None, tag=None):
+		'''
+		This function set a color to a specific item/tag.
+		:param color: the new color.
+		:param item: item name (optional)
+		:param tag: tag name (optional)
+		:return: None
+		'''
+
+		# Validate that the user give item/tag and set his color.
 		if item or tag:
 			tag = tag if tag else self.tree.item(item)['values'][self.text_by_item]
 			tag = str(tag).replace(' ', '_')
 			self.tree.tag_configure(tag, background=color)
-			self.visual_drag.tag_configure(tag, background=color)
+			if not self.disable_header_replace:
+				self.visual_drag.tag_configure(tag, background=color)
+
+	def export_table_csv(self):
+		''' Export the table to csv file '''
+		selected = tkFileDialog.asksaveasfilename(parent=self)
+		if selected and selected != '':
+			with open(selected, 'w') as fhandle:
+				csv_writer = csv.writer(fhandle)
+				csv_writer.writerow(self.headers)
+
+				# Export acording to if folder or not
+				if self.folder_by_item != None:
+					for row in self.data:
+						csv_writer.writerow(row[:self.folder_by_item] + [row[self.folder_by_item].replace(self.folder_text, '~')] + row[self.folder_by_item+1:])
+				else:
+					for row in self.data:
+						csv_writer.writerow(row)
 
 	def popup(self, event):
+		''' This function popup the right menu '''
+
+		# Stop swapping if the user moving some header.
 		if self.swapped:
 			self.bUp(event)
+
 		# If header selected:
 		if event.y < 25 and event.y > 0:
 			self.HeaderMenu.c_event = event
 			self.HeaderMenu.tk_popup(event.x_root, event.y_root)
 		else:
-			#print self.tree.column(self.tree.identify_row(event.y), 'id'), self.tree.identify_row(event.y)
+
 			# Select the item and popup menu
 			self.tree.selection_set(self.tree.identify_row(event.y))
+			if not self.disable_header_replace:
+				self.visual_drag.selection_set(self.tree.identify_row(event.y))
 			self.aMenu.tk_popup(event.x_root, event.y_root)
 
 	def sortby(self, col, descending):
-		#Sort table contents when a column header is clicked.
-		#:Parameters:
-		#    **col**
-		#	The column identifier of the column to sort.
-		#    **descending**
-		#	False if ascending, True if descending, switches each time.
+		'''
+		This function sort column
+		:param col: column to sort
+		:param descending: order True-descending or false-ascending (saved and switch each time)
+		:return:
+		'''
 
-		#logging.debug('sortby %s, descending: %s', col, descending)
+
 		# grab values to sort
 		if time.time() - self.last_seperator_time < 0.75 or self.swapped:
 			self.swapped = False
@@ -7170,30 +7894,23 @@ class TreeTable(Frame):
 		data = [(self.tree.set(child[0], col), child)
 				for child in self.get_all_children(self.tree)]
 
-		# now sort the data in place
-		try:#sort by hexa
+		# now sort the data in place (try first to sort by hex value (int is good to) than by string)
+		try:
 			data = sorted(data, reverse=descending, key=lambda x: int(x[0], 16))
-		except:#sort by string
+		except (ValueError, TypeError):
 			data.sort(reverse=descending)
+
 		for idx, item in enumerate(data):
 			self.tree.move(item[1][0], '', idx)
-			self.visual_drag.move(item[1][0], '', idx)
+			if not self.disable_header_replace:
+				self.visual_drag.move(item[1][0], '', idx)
+
 		# switch the heading so it will sort in the opposite direction
 		callback = lambda: self.sortby(col, not descending)
 		self.tree.heading(col, command=callback)
 
-	def treeview_sort_column(self, tv, col, reverse):
-		l = [(tv.set(k, col), k) for k in tv.get_all_children(self.tree)]
-		l.sort(key=lambda t: int(t[0]), reverse=reverse)
-		#      ^^^^^^^^^^^^^^^^^^^^^^^
-
-		for index, (val, k) in enumerate(l):
-			tv.move(k, '', index)
-
-		tv.heading(col,
-				   command=lambda: treeview_sort_column(tv, col, not reverse))
-
 	def show_original_order(self, event=None):
+		''' This function show the original order of the tree (created order)'''
 		for idx, item in enumerate(self.original_order):
 			if isinstance(item[1], tuple):
 				item = item[1]
@@ -7205,33 +7922,39 @@ class TreeLable(TreeTable):
 	Tree View with description on click
 	'''
 
-	def __init__(self, master, headers, data, name=None, text_by_item=0, resize=False, display=None, progressbar=False, *args, **kwargs):
-		TreeTable.__init__(self, master, headers, data, name, text_by_item, resize, display, progressbar)
+	def __init__(self, master, headers, data, name=None, text_by_item=0, resize=False, display=None, *args, **kwargs):
+		TreeTable.__init__(self, master, headers, data, name, text_by_item, resize, display)
 		self.tree['height'] = self.tree['height'] = 10 if len(data) > 10 else len(data)
 		self.pack(expand=YES, fill=BOTH)
 
+		# Class variables
 		self.opts = {}
 		self.frame = frame = ttk.Frame(master)
-
 		self.frames = []
+
 		counter = 0
 		col_size = 4
+
+		# Go all over the headers
 		for item in headers:
 			if counter % col_size == 0:
 				papa = ttk.Frame(frame)
 				self.frames.append((ttk.Frame(papa), ttk.Frame(papa), papa))
 
+			# Create a label to each header.
 			ttk.Label(self.frames[counter/col_size][0], text='{} : '.format(item), wraplength=500).pack(anchor='w', padx=10)
 			self.opts[item] = StringVar()
 			self.opts[item].set('-')
 			ttk.Label(self.frames[counter/col_size][1], textvariable=self.opts[item]).pack(anchor='w')
 
+		# Pack all the frames
 		for c_frame in self.frames:
 			c_frame[0].pack(side=LEFT)
 			c_frame[1].pack(side=LEFT)
 			c_frame[2].grid(row=self.frames.index(c_frame), column=1)
 		frame.pack(anchor='nw')
 
+		# Bind item selection change
 		self.tree.bind("<<TreeviewSelect>>", self.update_items, add='+')
 
 	def update_items(self, event=None):
@@ -7245,8 +7968,11 @@ class TreeLable(TreeTable):
 		if len(self.tree.selection()) == 0:
 			return
 
+		# Get the selected item
 		item = self.tree.selection()[0]
 		values = self.tree.item(item)['values']
+
+		# Set all the items to the selected item
 		for item in range(len(self.headers)):
 			self.opts[self.headers[item]].set(values[item])
 
@@ -7255,27 +7981,32 @@ class TreeTree(Frame):
 	Tree View with description on click (As another TreeView)
 	'''
 
-	def __init__(self, master, headers, data, name=None, text_by_item=0, resize=False, display=None, progressbar=False, *args, **kwargs):
+	def __init__(self, master, headers, data, name=None, text_by_item=0, resize=False, display=None, *args, **kwargs):
 		Frame.__init__(self, master, name=name)
 		self.master = master
 		self.pw = PanedWindow(self, orient='vertical')
-		self.main_t = main_t = TreeTable(self.pw, headers,  data, name, text_by_item, resize, display, progressbar, *args, **kwargs)
+
+		# Create the main table of all the information.
+		self.main_t = main_t = TreeTable(self.pw, headers,  data, name, text_by_item, resize, display, *args, **kwargs)
 		self.aMenu = self.main_t.aMenu
 		main_t.tree['height'] = main_t.tree['height'] = 10 if len(data) > 10 else len(data)
 		main_t.pack(expand=YES, fill=BOTH)
 
 		self.opts = {}
-		self.mem_view = mem_view = TreeTable(self.pw, ("Members", "Values"), [], name, 0, resize, ("Members", "Values"), progressbar, *args, **kwargs)
+
+		# Create the lower table.
+		self.mem_view = mem_view = TreeTable(self.pw, ("Members", "Values"), [], name, 0, resize, ("Members", "Values"), *args, **kwargs)
 		for item in headers:
 			self.opts[item] = StringVar()
 			self.opts[item].set('-')
 			mem_view.tree.insert('', END, values=(item, self.opts[item].get()), text=item)
 			mem_view.visual_drag.insert('', END, values=(item, self.opts[item].get()), text=item)
-
 		mem_view.pack(expand=YES, fill=BOTH)
 		self.pw.add(main_t)
 		self.pw.add(mem_view)
 		self.pw.pack(expand=YES, side=TOP, fill=BOTH)
+
+		# Bind item selection change
 		main_t.tree.bind("<<TreeviewSelect>>", self.update_items, add='+')
 
 	def update_items(self, event=None):
@@ -7289,11 +8020,16 @@ class TreeTree(Frame):
 		if len(self.main_t.tree.selection()) == 0:
 			return
 
+		# Get the selected item.
 		item = self.main_t.tree.selection()[0]
 		values = self.main_t.tree.item(item)['values']
+
+		# Go all over the headers
 		for item in range(len(self.main_t.headers)):
 			self.opts[self.main_t.headers[item]].set(values[item])
 			index = 0
+			
+			# Set the table to the selected item.
 			for c_item in self.mem_view.tree.get_children():
 				self.mem_view.tree.item(c_item, values=(self.main_t.headers[index], self.opts[self.main_t.headers[index]].get()))
 				self.mem_view.visual_drag.item(c_item, values=(self.main_t.headers[index], self.opts[self.main_t.headers[index]].get()))
@@ -7303,18 +8039,19 @@ class DllsTable(TreeTable):
 	'''
 	The Tree for the dlls and devices.
 	'''
-	def __init__(self, master, main_table, headers, data, name=None, text_by_item=0, resize=False, display=None, progressbar=False, pid=None):
+	def __init__(self, master, main_table, headers, data, name=None, text_by_item=0, resize=False, display=None, pid=None):
 		if not pid:
-			TreeTable.__init__(self, master, headers, data, name, text_by_item, resize, display, progressbar)
-		#self.aMenu = Menu(master, tearoff=0)
-		self.pid = int(pid) if pid else pid
-		self.send = False
+			TreeTable.__init__(self, master, headers, data, name, text_by_item, resize, display)
 
-		#self.apps = []
-		#self.app_counter = 0
+		# Init Class Variables
+		self.pid = int(pid) if pid else pid
+		self.main_selection = main_table.tree.selection()[0] if len(main_table.tree.selection()) > 0 else 'I001'
+		self.send = False
 		self.main_table = main_table
 		self.lower_table = master
 		self.last_tab = "PEImage"
+
+		# Init Gui
 		self.aMenu.add_separator()
 		self.aMenu.add_command(label='Dump PE', command=self.DllDump)
 		self.hexdump_menu = Menu(self.aMenu)
@@ -7333,56 +8070,40 @@ class DllsTable(TreeTable):
 		self.colors_menu.add_separator()
 		self.colors_menu.add_command(label='Custom Color', command=lambda: self.SetColor(_from_rgb(tkColorChooser.askcolor()[0])))
 		self.aMenu.add_cascade(label='HexDump', menu=self.hexdump_menu)
+		self.aMenu.add_command(label='Struct Analysis', command=lambda: self.run_struct_analyze('_LDR_DATA_TABLE_ENTRY'))
 		self.aMenu.add_separator()
 		self.aMenu.add_cascade(label='Color', menu=self.colors_menu)
 		self.aMenu.add_separator()
 		self.aMenu.add_cascade(label='Properties', menu=self.properties_menu)
 		self.tree.bind("<Double-1>", self.Properties)
-		# self.aMenu.add_command(label='Properties', command=self.Properties)
-		self.tree.bind("<ButtonRelease-1>", self.OnOneClick_dll, add='+')
 		self.tree.bind(right_click_event, self.popup)
 		self.set_saved_color()
-	def OnOneClick_dll(self, event):
-		global root
-		global volself
-		#global main_table
-		if len(self.main_table.tree.selection()) == 0 or len(self.tree.selection()) == 0:
-			return
-
-		item = self.main_table.tree.selection()[0]
-		task = process_bases[self.pid or int(self.main_table.tree.item(item)['values'][self.main_table.text_by_item])]["proc"]
-		task_space = task.get_process_address_space()
-		dllitem = self.tree.selection()[0]
-
-		# The module name not in the dict (because the module have invalid address: -1)
-		if not process_bases[self.pid or int(self.main_table.tree.item(item)['values'][self.main_table.text_by_item])]["dlls"].has_key(self.tree.item(dllitem)['values'][self.text_by_item]):
-			return
-		module = process_bases[self.pid or int(self.main_table.tree.item(item)['values'][self.main_table.text_by_item])]["dlls"][self.tree.item(dllitem)['values'][self.text_by_item]]
-		"""
-		print 'item:',item
-		print 'task:',task, self.main_table.tree.item(item)['values'][self.main_table.text_by_item]
-		print 'dllitem:', dllitem, self.tree.item(dllitem)['values'][self.text_by_item]
-		print 'module:', module
-		"""
 
 	def DllDump(self):
+		'''
+		Dump a dll object from memory using dump_pe.
+		:return: None
+		'''
 		global root
 		global volself
-		#global self.main_table
 		global lock
 		if len(self.main_table.tree.selection()) == 0 or len(self.tree.selection()) == 0:
 			return
 
-		item = self.main_table.tree.selection()[0]
+		item = self.main_selection
 		task = process_bases[self.pid or int(self.main_table.tree.item(item)['values'][self.main_table.text_by_item])]["proc"]
 		task_space = task.get_process_address_space()
 		dllitem = self.tree.selection()[0]
+
+		# Check if we have the address of this pe.
 		if not process_bases[self.pid or int(self.main_table.tree.item(item)['values'][self.main_table.text_by_item])]["dlls"].has_key(self.tree.item(dllitem)['values'][self.text_by_item]):
 			def show_message_func():
 				messagebox.showerror("Error", "Unable to locate this PE address in memory)", parent=self)
 
 			queue.put((show_message_func, ()))
 			return
+
+		# Get the address and create a name for the dumped file
 		module = process_bases[self.pid or int(self.main_table.tree.item(item)['values'][self.main_table.text_by_item])]["dlls"][self.tree.item(dllitem)['values'][self.text_by_item]]
 		dump_file = task.ImageFileName + str(task.UniqueProcessId) + self.tree.item(dllitem)['values'][self.text_by_item] + ".dll"
 
@@ -7403,24 +8124,41 @@ class DllsTable(TreeTable):
 		queue.put((show_message_func, (result, )))
 
 	def MemHex(self):
+		'''
+		Summon a thread to do hexdump (memory)
+		:return: None
+		'''
 		if len(self.main_table.tree.selection()) == 0 or len(self.tree.selection()) == 0:
 			return
-		threading.Thread(target=self.PEHex_thread, args=(self.main_table.tree.item(self.main_table.tree.selection()[0]), self.tree.item(self.tree.selection()[0]), True)).start()
+		threading.Thread(target=self.PEHex_thread, args=(self.main_table.tree.item(self.main_selection), self.tree.item(self.tree.selection()[0]), True)).start()
 		time.sleep(1)
 		
 	def ImageHex(self):
+		'''
+		Summon a thread to do hexdump (image)
+		:return:
+		'''
 		if len(self.main_table.tree.selection()) == 0 or len(self.tree.selection()) == 0:
 			return
-		threading.Thread(target=self.PEHex_thread, args=(self.main_table.tree.item(self.main_table.tree.selection()[0]), self.tree.item(self.tree.selection()[0]))).start()
+		threading.Thread(target=self.PEHex_thread, args=(self.main_table.tree.item(self.main_selection), self.tree.item(self.tree.selection()[0]))).start()
 		time.sleep(1)
 		
 	def PEHex_thread(self, mt_item, c_item, mem=False):
+		'''
+		HexDump a PE from the memory using dump pe mem flag accurding to the args.
+		:param mt_item: the item from the main table (process)
+		:param c_item: the item from the lower table (pe- dll for example)
+		:param mem: flag to the dump_pe
+		:return: None
+		'''
 		global root
 		global volself
-		#global main_table
 
+		# Get the address space.
 		task = process_bases[self.pid or int(mt_item['values'][self.main_table.text_by_item])]["proc"]
 		task_space = task.get_process_address_space()
+
+		# Check if we have the address of this pe.
 		if not process_bases[self.pid or int(mt_item['values'][self.main_table.text_by_item])]["dlls"].has_key(c_item['values'][self.text_by_item]):
 			def show_message_func():
 				messagebox.showerror("Error", "Unable to locate this PE address in memory)", parent=self)
@@ -7428,6 +8166,8 @@ class DllsTable(TreeTable):
 			queue.put((show_message_func, ()))
 			return
 		module = process_bases[self.pid or int(mt_item['values'][self.main_table.text_by_item])]["dlls"][c_item['values'][self.text_by_item]]
+
+		# Try to dump this pe
 		try:
 			dump_file = task.ImageFileName + str(task.UniqueProcessId) + c_item['values'][self.text_by_item] + ".dll"
 			file_mem = dump_pe(volself, task_space,
@@ -7446,7 +8186,7 @@ class DllsTable(TreeTable):
 
 			queue.put((create_hex_dump, (dump_file, file_mem)))
 
-
+		# Show error if the dump fail.
 		except Exception as ex:
 			print 'exception', ex
 
@@ -7456,25 +8196,43 @@ class DllsTable(TreeTable):
 			queue.put((show_message_func, ()))
 
 	def Properties(self, event, top_level=True):
+		'''
+		Show the properties (with or without strings according to the options choose by the user).
+		:param event: None
+		:param top_level: as top level or insert as a tab.
+		:return: None
+		'''
 		if event and event.y < 25 and event.y > 0:
 			try:
 				if self.tree.identify_region(event.x, event.y) == 'separator':
 					self.resize_col(self.tree.identify_column(event.x))
 					return
-			except:
+			except tk.TclError:
 				return
 
 		# Return if no item selected
 		if len(self.main_table.tree.selection()) == 0 or len(self.tree.selection()) == 0:
 			return
+
+		# Display the right message (according to if the user wants to view strings or not).
 		if volself._show_pe_strings == 'true':
 			MessagePopUp('Data loading in the background\nThis will going to take a while because of strings searching\n(you can disable this option in the options menu)', 5, root)
 		else:
 			MessagePopUp('Data loading in the background\nThis can take a couple of seconds (faster than the usual because you disable the strings search)', 3, root)
-		threading.Thread(target=self.properties_thread, args=(event, self.main_table.tree.item(self.main_table.tree.selection()[0]), self.tree.item(self.tree.selection()[0]), top_level)).start()
+
+		# Start the thread that do the work.
+		threading.Thread(target=self.properties_thread, args=(event, self.main_table.tree.item(self.main_selection), self.tree.item(self.tree.selection()[0]), top_level)).start()
 		time.sleep(1)
 
 	def properties_thread(self, event=None, mt_item=None, c_item=None, top_level=True):
+		'''
+		This function summon as a thread (so the gui not freez)
+		:param event: None
+		:param mt_item: the item from the main table (process)
+		:param c_item: the item from the lower table (pe- dll for example)
+		:param top_level: Summon as a top level or as another tab.
+		:return:
+		'''
 		global root
 		global volself
 		global queue
@@ -7489,9 +8247,11 @@ class DllsTable(TreeTable):
 		pe_conf.KDBG = volself._config.KDBG
 		pe_conf.kaddr_space = utils.load_as(pe_conf)
 
-		task = obj.Object("_EPROCESS", process_bases[self.pid or int(mt_item['values'][self.main_table.text_by_item])]["proc"].obj_offset, pe_conf.kaddr_space) #process_bases[self.pid or int(mt_item['values'][self.main_table.text_by_item])]["proc"]
-		task_space = pe_conf.kaddr_space if self.pid else task.get_process_address_space() #volself.kaddr_space if self.pid else task.get_process_address_space()
-		
+		# Get the address Space (from another conf so we dont have a error).
+		task = obj.Object("_EPROCESS", process_bases[self.pid or int(mt_item['values'][self.main_table.text_by_item])]["proc"].obj_offset, pe_conf.kaddr_space)
+		task_space = pe_conf.kaddr_space if self.pid else task.get_process_address_space()
+
+		# Check if we have the address of this pe.
 		if not process_bases[self.pid or int(mt_item['values'][self.main_table.text_by_item])]["dlls"].has_key(c_item['values'][self.text_by_item]):
 			def show_message_func():
 				messagebox.showerror("Error", "Unable to locate this PE address in memory)", parent=self)
@@ -7507,12 +8267,14 @@ class DllsTable(TreeTable):
 
 		pefile = obj.Object("_IMAGE_DOS_HEADER", offset=module, vm=task_space)
 
+		# Get nt_hreader
 		try:
 			nt_headers = pefile.get_nt_header()
 		except Exception as ex:
 			queue.put((messagebox.showerror, ("Error", "{}".format(ex), ('**kwargs', {'parent': self}))))
 			return
 
+		# Get the strings if the user wants to
 		if volself._show_pe_strings == 'true':
 			mem_strings_list = list(pefile.get_image(unsafe=False, memory=True, fix=False))
 			mem_strings = "".join(i[1] for i in mem_strings_list)
@@ -7529,7 +8291,8 @@ class DllsTable(TreeTable):
 		lm = list(win32.modules.lsmod(pe_conf.kaddr_space)) if self.pid==4 or int(mt_item['values'][self.main_table.text_by_item])==4 else list(task.get_load_modules())
 		imports = []
 		exports = []
-		#load_tp_start(self, 'Loading PE information')
+
+		# Get the imports.
 		for c_module in lm:
 			if c_module.DllBase == module:
 				module_name = c_module.BaseDllName
@@ -7545,12 +8308,14 @@ class DllsTable(TreeTable):
 		my_data = [pefile, imports, exports, mem_strings, image_strings, c_module, self.pid or int(mt_item['values'][self.main_table.text_by_item]), nt_headers]
 
 		def change_last_tab(self, c_self):
+			''' This function remember the last tab pressed (so next time he will automatically pressed). '''
 			clicked_tab = c_self.tabcontroller.tab(c_self.tabcontroller.select(), "text")
 			if clicked_tab in ('PEImage', 'PEImports', 'PEExports', 'MemStrings', 'ImageStrings'):
 				self.last_tab = clicked_tab
 
 		self.change_last_tab = change_last_tab
 
+		# Create the gui (on top level or as a tab)
 		if top_level:
 			def create_top_level(self):
 				app = tk.Toplevel()
@@ -7581,35 +8346,72 @@ class DllsTable(TreeTable):
 			queue.put((attach_to_main, (self,)))
 
 		job_queue.put_alert((id, 'PE properties', "{}({}):{} Properties".format('System' if self.pid else mt_item['values'][0], self.pid or mt_item['values'][self.main_table.text_by_item], module_name), 'Done'))
-		#unload_tp(self)
+
+	def run_struct_analyze(self, struct_type):
+		'''
+		get address and sent to teal struct analyze function.
+		'''
+		item = self.tree.selection()[0]
+		addr = self.tree.item(item)['values'][-1]
+		if not addr:
+			print "[-] unable to find the address of this {}".format(struct_type)
+			return
+		print "[+] Run Struct Analyze on {}, addr: {}".format(struct_type, addr)
+		threading.Thread(target=run_struct_analyze, args=(struct_type, addr, None, int(self.pid) if self.pid else self.main_table.tree.item(self.main_selection)['values'][self.main_table.text_by_item])).start()
 
 	def SetColor(self, color, check_comment=True):
+		'''
+		Set a collor to some item.
+		:param color: Color
+		:param check_comment: Check and alert if there is no comment.
+		:return: None
+		'''
 		global pe_comments
 
-		item = self.main_table.tree.selection()[0]
+		item = self.main_selection
 		my_item = self.tree.selection()[0]
 		tag = str(self.tree.item(my_item)['values'][self.text_by_item]).replace(' ', '_')
 		self.tree.tag_configure(tag, background=color)
 		self.visual_drag.tag_configure(tag, background=color)
 		tag = str(self.tree.item(my_item)['values'][1 if len(self.headers) == 3 else 3]).replace(' ', '_')
 		pid = int(self.pid or int(self.main_table.tree.item(item)['values'][self.main_table.text_by_item]))
-		#print pe_comments['pid'][pid]
 		if check_comment and (pe_comments['pid'][pid][tag][1] == "Write Your Comments Here." or (pe_comments['pid'][pid][tag][1].startswith("Write Your Comments Here.") and pe_comments['pid'][pid][tag][1].endswith(")."))) and color != 'white':
 			messagebox.showwarning("Undocumented PE", "RECOMMENDED:\nDouble click on the PE.\nEnter your comment", parent=self)
 		pe_comments['pid'][pid][tag][1] = color
 
 	def set_saved_color(self):
+		'''
+		Set the color according to the user color (this function called when the table create).
+		:return: None
+		'''
 		global pe_comments
 
-		item = 'I001' if self.pid else self.main_table.tree.selection()[0]
+		item = self.main_selection
 		pid = int(self.pid or int(self.main_table.tree.item(item)['values'][self.main_table.text_by_item]))
+
+		# Go all over the table
 		for child in self.get_all_children(self.tree):
 			child = child[0]
-			if len(self.headers) == 4:
-				fn, description, cn, path = self.tree.item(child)['values']
+
+			# Check if this dllstable represent a kernel modules or regular dlls.
+			if len(self.headers) == 6:
+				fn, description, cn, path, dll_base, ldr_addr = self.tree.item(child)['values']
 			else:
-				fn, path, addr = self.tree.item(child)['values']
-			if path and path != '' and pe_comments['pid'][pid][path][1] != 'white':
+				fn, path, addr, ldr_addr = self.tree.item(child)['values']
+
+			# Skip none path
+			if not path or path == '':
+				continue
+
+			# unfix the treetable
+			if not pe_comments['pid'][pid].has_key(path):
+				path = path.replace('\{', r'{').replace(r'\}', r'}')
+				if not pe_comments['pid'][pid].has_key(path):
+					print '[-] fail color pid:{} path:{}'.format(pid, path)
+					continue
+
+			# Collor the item.
+			if pe_comments['pid'][pid][path][1] != 'white':
 				item = child
 				color = pe_comments['pid'][pid][path][1]
 				tag = str(self.tree.item(item)['values'][self.text_by_item]).replace(' ', '_')
@@ -7620,20 +8422,20 @@ class ProcessesTable(TreeTable):
 	'''
 	the tree for processes
 	'''
-	def __init__(self, master, headers, data, name=None, text_by_item=0, resize=False, display=None, progressbar=False, folder_by_item=0, folder_text="?/?"):
-		TreeTable.__init__(self, master, headers, data, name, text_by_item, resize, display, progressbar, folder_by_item, folder_text)
-		global main_table
+	def __init__(self, master, headers, data, name=None, text_by_item=0, resize=False, display=None, disable_header_replace=600, folder_by_item=0, folder_text="?/?"):
+		TreeTable.__init__(self, master, headers, data, name, text_by_item, resize, display, disable_header_replace, folder_by_item, folder_text)
 		global tree_view_data
-		if not main_table:
-			main_table = self
+
+		# Init Class Variables
 		self.lower_table = None
 		self.processes_alert = []
-		#self.aMenu = Menu(master, tearoff=0)
 		self.master = master
 		self.frames = {}
 		self.handle_or_dlls = None
 		self.last_click = [0, 0]
 		self.last_tab = "Image"
+		
+		# Init Class Gui
 		self.tree.bind("<ButtonRelease-1>", self.OnOneClick, add='+')
 		self.tree.bind("<space>", self.OnOneClick)
 		#self.tree.bind("<Double-1>", self.OnDoubleClick) # Im handle it better on BottonRelease-1 (self.OnOneClick) by checking time(need this because doubleclick event failed when the time range to long-> when we update the lower pane)
@@ -7682,10 +8484,10 @@ class ProcessesTable(TreeTable):
 			all_plugins_menu.add_command(label='{}'.format(all_plugins[1][plugin]),
 			                             command=functools.partial(self.run_plugin, all_plugins[1][plugin]))
 
+		# Init Class Menu
 		self.vt_menu = Menu(self.aMenu)
 		self.vt_menu.add_command(label="Upload To VirusTotal", command=self.upload_to_virus_total)
 		self.vt_menu.add_command(label="VirusTotal (Check Hash)", command=self.virus_total_summon)
-
 		self.aMenu.add_separator()
 		self.aMenu.add_command(label='ProcDump', command=self.ProcDump)
 		self.aMenu.add_cascade(label='HexDump', menu=self.hexdump_menu)
@@ -7695,45 +8497,53 @@ class ProcessesTable(TreeTable):
 		self.aMenu.add_separator()
 		self.aMenu.add_cascade(label="Virus Total", menu=self.vt_menu)
 		self.aMenu.add_separator()
-		
-		# Try to get another config with pslist (may failed on some new memtriage windows profile).
-		try:
-			table_conf = conf.ConfObject()
-
-			# Define conf
-			table_conf.remove_option('SAVED-FILE')
-			table_conf.readonly = {}
-			table_conf.PROFILE = volself._config.PROFILE
-			table_conf.LOCATION = volself._config.LOCATION
-			table_conf.KDBG = volself._config.KDBG
-			self.table_conf = table_conf
-			self.kaddr_space = utils.load_as(self.table_conf)
-			self.task_list = list(tasks.pslist(self.kaddr_space))
-			self.lock = threading.Lock()
-
-			self.aMenu.add_command(label='Vad Information', command=self.process_memory)
-		except:
-			print '[-] volexp doesn\'t support vad information for this windows profile in memtriage'
+		self.aMenu.add_command(label='Vad Information', command=self.process_memory)
 		self.aMenu.add_command(label='Struct Analysis', command=lambda: self.run_struct_analyze('_EPROCESS'))
 		self.aMenu.add_cascade(label='Properties', menu=self.properties_menu)
 
+		# Go all over the tree_view_data (object that contains the processes order).
 		tree_view_data = [(self.tree.set(child[0], 'Process'), child)
 			for child in self.get_all_children(self.tree)] if not tree_view_data else tree_view_data
 		tree_view_data = sorted(tree_view_data,
 								key=lambda x: int(str(x[1][0] if isinstance(x[1], tuple) else x[0])[1:], 16))
 		self.set_saved_color()
 
+		# Create tasks list (for use by vadinfo).
+		table_conf = conf.ConfObject()
+
+		# Define conf
+		table_conf.remove_option('SAVED-FILE')
+		table_conf.readonly = {}
+		table_conf.PROFILE = volself._config.PROFILE
+		table_conf.LOCATION = volself._config.LOCATION
+		table_conf.KDBG = volself._config.KDBG
+		self.table_conf = table_conf
+		self.kaddr_space = utils.load_as(self.table_conf)
+		self.task_list = list(tasks.pslist(self.kaddr_space))
+		self.lock = threading.Lock()
+
 	def upload_to_virus_total(self):
+		'''
+		This Function upload an image of a process to virus total (in a thread).
+		:return: None
+		'''
 		item = main_table.tree.selection()[0]
 		values = self.tree.item(item)['values']
 		threading.Thread(target=self.virus_total, args=(values,'upload')).start()
 
 	def virus_total_summon(self):
+		'''
+		This function summon virus_total funciton as a thread (check hash, not upload).
+		:return: None
+		'''
 		global plugins_output
 
+		# Get arguments
 		item = main_table.tree.selection()[0]
 		values = self.tree.item(item)['values']
 		pid = int(values[1])
+
+		# Check if this process already checked in virus total (so display the result and exit).
 		if plugins_output.has_key(int(pid)):
 			for item in plugins_output[int(pid)]:
 				if item[0] == 'VirusTotal':
@@ -7747,14 +8557,22 @@ class ProcessesTable(TreeTable):
 		threading.Thread(target=self.virus_total, args=(values,)).start()
 
 	def virus_total(self, values, vt_type='hash'):
+		'''
+		This function dump the file, and check the hash if vt_type='hash' else upload to virush total.
+		:param values: information about the file.
+		:param vt_type: 'hash' or 'upload' to upload the file or just check the hash of the file.
+		:return: None
+		'''
 		global lock
 
+		# Get address space of the process.
 		file_path = values[-4]
 		pid = int(values[1])
 		process_name = values[0]
-
 		task = process_bases[int(pid)]["proc"]
 		task_space = task.get_process_address_space()
+
+		# Check if we get all the parameters we need
 		if task_space == None:
 			result = "Error: Cannot acquire process AS"
 		elif task.Peb == None:
@@ -7765,11 +8583,14 @@ class ProcessesTable(TreeTable):
 			result = "Error: ImageBaseAddress at {0:#x} is unavailable (possibly due to paging)".format(
 				task.Peb.ImageBaseAddress)
 		else:
-			dump_file = "executable." + task.ImageFileName + str(task.UniqueProcessId) + ".exe"
 
+			# Dump the file
+			dump_file = "executable." + task.ImageFileName + str(task.UniqueProcessId) + ".exe"
 			result =dump_pe(volself, task_space,
 					task.Peb.ImageBaseAddress,
 					dump_file)
+
+			# Check the hash else upload the file to virus total.
 			if vt_type=='hash':
 				hash = sha256(result['file']).hexdigest()
 				threading.Thread(target=virus_total, args=(hash, process_name, pid, file_path, api_key)).start()
@@ -7777,9 +8598,7 @@ class ProcessesTable(TreeTable):
 				threading.Thread(target=upload_to_virus_total, args=(process_name, result['file'], api_key)).start()
 
 	def run_struct_analyze(self, struct_type):
-		'''
-		get address and sent to teal struct analyze function.
-		'''
+		''' get address and sent to teal struct analyze function. '''
 		item = main_table.tree.selection()[0]
 		addr = self.tree.item(item)['values'][-1]
 		if not addr:
@@ -7787,13 +8606,20 @@ class ProcessesTable(TreeTable):
 			return
 		print "[+] Run Struct Analyze on {}, addr: {}".format(struct_type, addr)
 		threading.Thread(target=run_struct_analyze, args=(struct_type, addr)).start()
-		#run_struct_analyze(struct_type, addr)
+
 	def set_saved_color(self):
+		'''
+		This is init function that set the color of each process to the user previews change (if any).
+		:return: None
+		'''
 		global process_comments
 
+		# Go all over the table
 		for child in self.get_all_children(self.tree):
 			child = child[0]
 			process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc = self.tree.item(child)['values']
+
+			# Change the color (if the color ever changed).
 			if process_comments['pidColor'].has_key(pid):
 				item = child
 				color = process_comments['pidColor'][pid]
@@ -7802,9 +8628,15 @@ class ProcessesTable(TreeTable):
 				self.visual_drag.tag_configure(tag, background=color)
 
 	def run_plugin(self, plugin_name):
-		#plugin_name = all_plugins[1][plugin_name]
+		'''
+		This function summon the run plugin gui on specific process.
+		:param plugin_name: the name of the plugin.
+		:return: None
+		'''
+
+		# Get the pid
 		item = main_table.tree.selection()[0]
-		pid = self.tree.item(item, )['values'][self.text_by_item]
+		pid = self.tree.item(item)['values'][self.text_by_item]
 
 		# Check if the plugin run before.
 		if plugins_output.has_key(int(pid)):
@@ -7813,20 +8645,20 @@ class ProcessesTable(TreeTable):
 					self.OnDoubleClick(None, plugin_name)
 					return
 
+		# Init GUI.
 		app = tk.Toplevel()
 		app.geometry("500x480")
 		app.resizable(False, False)
 		label = ttk.Label(app, text="Title:")
-		label.pack()#side=tk.LEFT)
+		label.pack()
 		txt_entry = ttk.Entry(app, width=380)
 		txt_entry.insert(0, plugin_name)
-		txt_entry.pack()#side=tk.LEFT)
+		txt_entry.pack()
 		word_text = scrolledtext.ScrolledText(app, undo=True)
-		word_text.pack()#fill='both', padx=10, pady=2)
-		print '[+] run {}'.format(plugin_name)  # , rnd
-		item = main_table.tree.selection()[0]
-		pid = self.tree.item(item)['values'][self.text_by_item]
+		word_text.pack()
+		print '[+] run {}'.format(plugin_name)
 
+		# Display the command line (check if memtriage or regulare volatility).
 		if volself.is_memtriage:
 			command = r'"{}" "{}" --plugins={} -p {}'.format(sys.executable, volself._vol_path, plugin_name, pid)
 		else:
@@ -7837,52 +8669,85 @@ class ProcessesTable(TreeTable):
 
 
 		def run_plugin_thread():
+			''' This function summon the thread to run the plugin'''
 			command = word_text.get("1.0", 'end-1c')
 			tab_name = txt_entry.get()
 			app.destroy()
 			print '[+] run', command
 			threading.Thread(target=self.run_plugin_thread, args=(command, pid, tab_name)).start()
 
+		# Create the run button
 		apply = ttk.Button(app, text="Run & Update Properties", command=run_plugin_thread)
 		apply.pack()
 
 	def run_plugin_thread(self, command, pid, tab_name):
+		'''
+		This function run the plugin and append the result
+		:param command: command line to run
+		:param pid: process pid
+		:param tab_name: process name
+		:return: None
+		'''
 		global plugins_output
 
+		# Run the plugin
 		p = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
 		(output, err) = p.communicate()
-		p_status = p.wait()
+		p.wait()
 
+		# Print the result
 		print '[+] tab_name:', tab_name
 		print output
+
+		# Create the list of plugins (if the user never run a plugin on this process).
 		if not plugins_output.has_key(int(pid)):
 			plugins_output[int(pid)] = []
 
-		# If the user run the same plugin more than once before he get the output
+		# If the user run the same plugin more than once before he get the output.
 		if not (tab_name, output) in plugins_output[int(pid)]:
 			plugins_output[int(pid)].append((tab_name, output))
 
 	def SetColor(self, color, check_comment=True):
+		'''
+		This function let the user change a color to some process
+		:param color: color
+		:param check_comment: if to check if the user add a comment
+		:return: None
+		'''
 		global process_comments
 
+		# Get the tag.
 		item = main_table.tree.selection()[0]
 		tag = str(self.tree.item(item)['values'][self.text_by_item]).replace(' ', '_')
+
+		# Configure color to the tag.
 		self.tree.tag_configure(tag, background=color)
 		self.visual_drag.tag_configure(tag, background=color)
+
+		# Check the comment
 		if check_comment and (process_comments[int(tag)] == "Write Your Comments Here." or (process_comments[int(tag)].startswith("Write Your Comments Here.") and process_comments[int(tag)].endswith(")."))) and color != 'white':
 			messagebox.showwarning("Undocumented Process", "RECOMMENDED:\nDouble click on the process.\nEnter your comment", parent=self)
+
+		# Remember the data.
 		process_comments['pidColor'][int(tag)] = color
 
 	def ProcDump(self, event=None):
+		''' This function summon the ProcDumpThread function in a thread'''
 		threading.Thread(target=self.ProcDumpThread, args=(process_bases[int(self.tree.item(self.tree.selection()[0])['values'][self.text_by_item])]["proc"], )).start()
 		time.sleep(1)
 
 	def ProcDumpThread(self, task):
+		'''
+		This function dump a process
+		:param task: the process
+		:return: None
+		'''
 		global queue
 		global process_bases
 		global volself
 		global lock
 
+		# Get the address space and check if this is a valid address space
 		task_space = task.get_process_address_space()
 		if task_space == None:
 			result = "Error: Cannot acquire process AS"
@@ -7911,14 +8776,23 @@ class ProcessesTable(TreeTable):
 		queue.put((show_message_func, (result, )))
 
 	def MemHex(self):
+		''' This function summon the ProcHexThread in a thread with the mem=True'''
 		threading.Thread(target=self.ProcHexThread, args=(process_bases[int(self.tree.item(self.tree.selection()[0])['values'][self.text_by_item])]["proc"], True)).start()
 		time.sleep(1)
 	def ImageHex(self):
+		''' This function summon the ProcHexThread in a thread with the mem=False (default)'''
 		threading.Thread(target=self.ProcHexThread, args=(process_bases[int(self.tree.item(self.tree.selection()[0])['values'][self.text_by_item])]["proc"], )).start()
 		time.sleep(1)
 	def ProcHexThread(self, task, mem=False):
+		'''
+		This fucntion dump the process image (using dump_pe), create a hexdump and display it
+		:param task: process
+		:param mem: flag in dump_pe
+		:return: None
+		'''
 		global process_bases
 
+		# Get the address space and check if this is a valid address space
 		task_space = task.get_process_address_space()
 		if task_space == None:
 			result = "Error: Cannot acquire process AS"
@@ -7943,11 +8817,14 @@ class ProcessesTable(TreeTable):
 		else:
 
 			try:
+				
+				# Give a name to the dump file and dump it.
 				dump_file = "executable." + task.ImageFileName + str(task.UniqueProcessId) + ".exe"
 				file_mem = dump_pe(volself,task_space,
 								task.Peb.ImageBaseAddress,
 								dump_file, mem)
 				def create_hex_dump(dump_file, file_mem):
+					''' This function display the HexDump '''
 					app = HexDump(dump_file, file_mem, 16)
 					app.title('{} ()'.format(dump_file, 'Memory' if mem else 'File'))
 					window_width = 1050
@@ -7958,7 +8835,8 @@ class ProcessesTable(TreeTable):
 
 				queue.put((create_hex_dump, (dump_file, file_mem)))
 
-			except:
+			# Alert the user if the funciton fail
+			except Exception:
 				def show_message_func():
 					messagebox.showerror("Error", "Unable to get this {} HexDump".format('memory' if mem else 'file'), parent=self)
 
@@ -7970,8 +8848,6 @@ class ProcessesTable(TreeTable):
 		:param event: None
 		:return: None
 		'''
-		#vadinfo.PROTECT_FLAGS
-		#vadinfo.MI_VAD_TYPE
 		threading.Thread(target=self.process_memory_thread, args=(process_bases[int(self.tree.item(self.tree.selection()[0])['values'][self.text_by_item])]["proc"],)).start()
 		MessagePopUp(
 			'Data loading in the background\nThis will going to take a while because it\'s go all over the VAD\'s',
@@ -7983,11 +8859,6 @@ class ProcessesTable(TreeTable):
 		:param task: _EPROCESS
 		:return: None
 		'''
-		#peb = task.peb
-		#UserSharedInfoPtr
-		#ReadOnlySharedMemoryBase
-		#GdiSharedHandleTable
-		#GdiHandleBuffer
 
 		id = time.time()
 		job_queue.put_alert((id, 'Memory Information', 'get all the memory information - {} ({})'.format(str(task.ImageFileName), int(task.UniqueProcessId)), 'Running'))
@@ -7999,10 +8870,12 @@ class ProcessesTable(TreeTable):
 				task = c_task
 				break
 
+		stacks = {}
 		heaps = {}
 		heaps_segment = {}
 		task_peb = task.Peb
-		
+
+		# Go all over the heaps to get the addresses of the head and the segments.
 		for heap in task_peb.ProcessHeaps.dereference():
 			heaps[int(heap.obj_offset)] = heap.ProcessHeapsListIndex
 
@@ -8013,7 +8886,6 @@ class ProcessesTable(TreeTable):
 
 
 		# This is all other memory types.
-		
 		other_memory_range = {task_peb.obj_offset: 'PEB',
 							  task_peb.ReadOnlySharedMemoryBase.v(): 'Read Only Memory Base', # Shared / static server data...
 							  task_peb.GdiSharedHandleTable.v(): 'Gdi Shared Handle Table',
@@ -8026,7 +8898,7 @@ class ProcessesTable(TreeTable):
 		if hasattr(task_peb, 'LeapSecondData'):
 			other_memory_range.update({task_peb.LeapSecondData.v(): 'Leap Second Data'})
 
-		stacks = {}
+		# Go all over the threads and get stack information.
 		for thread in task.ThreadListHead.list_of_type("_ETHREAD", "ThreadListEntry"):
 			teb = obj.Object("_TEB", offset=thread.Tcb.Teb, vm=task.get_process_address_space())
 			if teb:
@@ -8049,6 +8921,7 @@ class ProcessesTable(TreeTable):
 
 		vad_data = []
 
+		# Go all over the vads
 		for vad in task.VadRoot.traverse():
 			if vad != None:
 
@@ -8177,10 +9050,11 @@ class ProcessesTable(TreeTable):
 		treetree.main_t.aMenu.add_command(label='Struct Analysis', command=lambda:treetree.main_t.vad_analyze(treetree))
 
 	def control_d(self, event=None):
-		#global help_table
+		''' This function handle ctrl+d press '''
 
 		# Return if there is no item selected.
 		if len(self.tree.selection()) == 0:
+			messagebox.showerror("Error", "Please select a process first.", parent=self)
 			return
 
 		if self.handle_or_dlls == 'Dlls':
@@ -8196,7 +9070,12 @@ class ProcessesTable(TreeTable):
 			self.show_lower_pane('Dlls')
 
 	def control_h(self, event):
-		#global self.lower_table
+		''' This function handle ctrl+h press '''
+
+		# Return if there is no item selected.
+		if len(self.tree.selection()) == 0:
+			messagebox.showerror("Error", "Please select a process first.", parent=self)
+			return
 
 		if self.handle_or_dlls == 'Handles':
 			self.handle_or_dlls = None
@@ -8211,7 +9090,12 @@ class ProcessesTable(TreeTable):
 			self.show_lower_pane('Handles')
 
 	def control_n(self, event):
-		#global help_table
+		''' This function handle ctrl+h press '''
+
+		# Return if there is no item selected.
+		if len(self.tree.selection()) == 0:
+			messagebox.showerror("Error", "Please select a process first.", parent=self)
+			return
 
 		if self.handle_or_dlls == 'Network':
 			self.handle_or_dlls = None
@@ -8226,13 +9110,18 @@ class ProcessesTable(TreeTable):
 			self.show_lower_pane('Network')
 
 	def show_lower_pane(self, frame_to_show=None):
+		'''
+		This function summon the lower pane.
+		:param frame_to_show: the last tab pressed by the user (remember).
+		:return: None
+		'''
 		global root
-		#global help_table
 		global files_info
 		global process_dlls
 		global process_handles
 		global process_connections
 
+		# Destroy previews table (if any)
 		if not self.lower_table is None:
 			self.handle_or_dlls = frame_to_show or ("Dlls", "Handles", "Network")[self.lower_table.index(self.lower_table.select())]
 			self.lower_table.destroy()
@@ -8241,11 +9130,16 @@ class ProcessesTable(TreeTable):
 
 		self.lower_table = NoteBook(self.master)
 		item = self.tree.selection()[0]
-		data = process_dlls[int(self.tree.item(item)['values'][self.text_by_item])]
+		pid = int(self.tree.item(item)['values'][self.text_by_item])
+		data = process_dlls[pid]
 		good_data = []
+
+		# Get all the dlls data.
 		for item in data:
+
+			# Check if fail to get this dll data.
 			if "Failed to get dll name on address: " in item:
-				good_data.append((item,"","",""))
+				good_data.append((item,"","","","",""))
 			else:
 				cn = ""
 				Description = ""
@@ -8254,10 +9148,10 @@ class ProcessesTable(TreeTable):
 						cn = files_info[str(item).lower()]["CompanyName"]
 					if files_info[str(item).lower()].has_key("FileDescription"):
 						Description = files_info[str(item).lower()]["FileDescription"]
-				good_data.append((item[item.rfind('\\')+1:], cn, Description, item))
+				good_data.append((item[item.rfind('\\')+1:], cn, Description, item) + ((process_bases[pid]['dlls'][item[item.rfind('\\')+1:]], process_bases[pid]['ldr'][item[item.rfind('\\')+1:]]) if process_bases[pid]['dlls'].has_key(item[item.rfind('\\')+1:]) else (-1, -1)))
 
-		self.dlls_table = dlls_table = DllsTable(self.lower_table, self, headers=["Name", "Company Name", "Description", "Path"], data=good_data, resize=False)
-		#self.lower_table.tree['height'] = 22
+		# Create the dll data table.
+		self.dlls_table = dlls_table = DllsTable(self.lower_table, self, headers=["Name", "Company Name", "Description", "Path", "Dll Base", "Ldr Address"], data=good_data, resize=False, display=("Name", "Company Name", "Description", "Path"))
 		self.frames['Dlls'] = dlls_table
 		dlls_table.pack(side=TOP, fill=BOTH)
 		self.lower_table.add(dlls_table, text='Dlls')
@@ -8276,16 +9170,18 @@ class ProcessesTable(TreeTable):
 					if val[1] != '':
 						data.append(val)
 		else:
-			if done_run.has_key('process_handles'):
+			if done_run.has_key('process_handles') and done_run['process_handles']:
 				data = [('No', 'handles', 'found', '0', '0', '0', '0', '0', '0')]
 			else:
 				data = [('Searching', 'for', 'handles', '0', '0', '0', '0', '0', '0')]
 
-		self.handles_tablel = handles_table = TreeTable(self.lower_table, headers=("Type", "Name", "File Share Access", "Handle", "Access", "Access (meaning)", "Virtual Address", "Physical Address"), data=data, resize=False)
+		# Create the handles data table.
+		self.handles_tablel = handles_table = TreeTable(self.lower_table, headers=("Type", "Name", "File Share Access", "Handle", "Access", "Access (meaning)", "Virtual Address", "Physical Address"), data=data, resize=False, display=("Type", "Name", "File Share Access", "Handle", "Access", "Access (meaning)"))
 		self.frames['Handles'] = handles_table
 		handles_table.pack(side=TOP, fill=BOTH)
 		self.lower_table.add(handles_table, text='Handles')
 
+		# Get and create the network data table.
 		data = [tup for tup in process_connections[int(self.tree.item(item)['values'][self.text_by_item])]] if process_connections.has_key(int(self.tree.item(item)['values'][self.text_by_item])) else [
 			("There", "is", "no", "conenctions", "at", "all") if len(process_connections) > 0 else ["searching", "for",
 																									"connections,",
@@ -8295,9 +9191,12 @@ class ProcessesTable(TreeTable):
 		self.frames['Network'] = network_table
 		network_table.pack(side=TOP, fill=BOTH)
 		self.lower_table.add(network_table, text='Network')
+		
+		# Create the notebook
 		self.master.add(self.lower_table)
 		self.lower_table.handles_table = handles_table
 		self.lower_table.dlls_table = dlls_table
+		self.lower_table.network_table = network_table
 		if self.handle_or_dlls:
 			self.lower_table.select(self.frames[self.handle_or_dlls])
 
@@ -8306,7 +9205,13 @@ class ProcessesTable(TreeTable):
 			self.master.master.master.geometry('{}x630'.format(self.master.master.master.winfo_width()))
 
 	def OnOneClick(self, event):
-
+		'''
+		Handle one click event
+		:param event: event
+		:return: None
+		'''
+		
+		# Not header
 		if event.y > 25:
 			item = self.tree.selection()[0]
 			pid = self.tree.item(item)['values'][self.text_by_item]
@@ -8316,6 +9221,8 @@ class ProcessesTable(TreeTable):
 				self.processes_alert.remove(pid)
 
 			if self.last_click[1] == item:
+				
+				# Check if this is double click event.
 				if time.time() - self.last_click[0] < 0.9:# and self.lower_table:
 					#self.tree.item(item, open=1 - self.tree.item(item, option='open'))
 					self.OnDoubleClick(None)
@@ -8323,7 +9230,7 @@ class ProcessesTable(TreeTable):
 				self.last_click[1] = item
 				return
 
-
+			# Summon the right table.
 			if self.handle_or_dlls == 'Dlls':
 				self.show_lower_pane()
 			elif self.handle_or_dlls == 'Handles':
@@ -8335,21 +9242,28 @@ class ProcessesTable(TreeTable):
 			self.last_click[1] = item
 
 	def OnDoubleClick(self, event, menu_show='Image', select=None, top_level=True):
-
+		'''
+		This function display the properties gui
+		:param event: None
+		:param menu_show: previews selected tab by the user (remember)
+		:param select: select specific tab.
+		:param top_level: as top lovel or another tab
+		:return: None
+		'''
 		# Double click on table header to resize
 		if event and event.y < 25 and event.y > 0:
 			try:
 				if self.tree.identify_region(event.x, event.y) == 'separator':
 					self.resize_col(self.tree.identify_column(event.x))
 				return
-			except:
+			except tk.TclError:
 				return
 		# Double click where no item selected
-		elif len(self.tree.selection()) == 0 :
+		elif len(self.tree.selection()) == 0:
+			messagebox.showerror("Error", "Please select a process first.", parent=self)
 			return
 
 		global root
-		#global help_table
 		global process_handles
 		item = select or self.tree.selection()[0]
 		if event:
@@ -8358,16 +9272,19 @@ class ProcessesTable(TreeTable):
 		proc_name = self.tree.item(item)['values'][0]
 
 		def change_last_tab(self, c_self):
+			''' This function remember the last user selected tab '''
 			clicked_tab = c_self.tabcontroller.tab(c_self.tabcontroller.select(), "text")
 			if clicked_tab in ('Image', 'Imports', 'Performance', 'Services', 'Threads', 'TcpIp', 'Security', 'Environment', 'Job'):
 				self.last_tab = clicked_tab
 
 		self.change_last_tab = change_last_tab
+
+		# Display the process properties (as top level else as tab).
 		if top_level:
 			app = tk.Toplevel()
 			x = root.winfo_x()
 			y = root.winfo_y()
-			app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
+			app.geometry("+%d+%d" % (x + ABS_X + 200, y + ABS_Y + 30))
 			if menu_show == "Image":
 				menu_show = self.last_tab
 			PropertiesClass(app, menu_show=menu_show, selection=item, relate=app).pack(fill=BOTH, expand=YES)
@@ -8375,88 +9292,123 @@ class ProcessesTable(TreeTable):
 				if hasattr(c_child, 'tabcontroller'):
 					c_child.tabcontroller.bind("<<NotebookTabChanged>>", lambda f:self.change_last_tab(self, c_child))
 			app.title("{}:{} Properties".format(proc_name, self.tree.item(item)['values'][self.text_by_item]))
-			#app.resizable(False, False)
 			window_width = 750
 			window_height = 500
-			width = app.winfo_screenwidth()
-			height = app.winfo_screenheight()
-			app.geometry('%dx%d+%d+%d' % (window_width, window_height, width*0.5-(window_width/2), height*0.5-(window_height/2)))
+			app.geometry('%dx%d' % (window_width, window_height))
 		else:
 			frame = PropertiesClass(self.master.master, menu_show=menu_show, selection=item, relate=self.master.master.master)
 			frame.pack(side=TOP, fill=BOTH)
 			self.master.master.add(frame, text="{}:{} Properties".format(proc_name, self.tree.item(item)['values'][self.text_by_item]))
 
 	def control_f(self, event=None):
+		''' This function handle ctrl+f press (summon the search) '''
 		app = Search(self.lower_table, self, headers=("PROCESS", "PID", "Type", "Name"))
 		app.title("Search - Handle or Dll")
 		app.geometry("500x300")
 
 	def unalert_all(self, event=None):
+		''' This function call a function that unalert all the processes '''
 		queue.put((self.unalert_all_thread, ()))
 
 	def unalert_all_thread(self):
+		''' This function unalert all the processes '''
 		for i in self.get_all_children(self.tree):
 			i = i[0]
-			self.tree.item(i, tags=self.tree.item(i)['values'][self.text_by_item])
-			self.visual_drag.item(i, tags=self.visual_drag.item(i)['values'][self.text_by_item])
+			try:
+				self.tree.item(i, tags=self.tree.item(i)['values'][self.text_by_item])
+				self.visual_drag.item(i, tags=self.visual_drag.item(i)['values'][self.text_by_item])
+			except TclError:
+				pass
 		self.processes_alert = []
 
 	def set_processes_alert(self, pid_list):
+		'''
+		Set all the procesess from the pid list to be alerted (change colors)
+		:param pid_list: list of pids
+		:return:
+		'''
 		self.processes_alert = pid_list
+
+		# Insert all the processes to the colored tag (called process_alerts)
 		for i in self.get_all_children(self.tree):
 			i = i[0]
 			pid = self.tree.item(i)['values'][self.text_by_item]
 			if pid in self.processes_alert:
-				self.tree.item(i, tags="tag_directory")
-				self.visual_drag.item(i, tags="tag_directory")
+				self.tree.item(i, tags="process_alerts")
+				self.visual_drag.item(i, tags="process_alerts")
 		threading.Thread(target=self.process_alert).start()
 
 	def process_alert(self, colors=['yellow', 'white'], color_index=0):
+		'''
+		This process set the tag of the self.processes_alert process to another color from colors
+		:param colors: the colors to change to
+		:param color_index: the index in colors
+		:return: None
+		'''
+
+		# Go all over the alerted processes.
 		while(len(self.processes_alert)):
 			color = colors[color_index]
 			color_index = (color_index + 1) % len(colors)
 
 			def set_color():
-				self.tree.tag_configure('tag_directory', background=color)
-				self.visual_drag.tag_configure('tag_directory', background=color)
+				''' This function set the tag for a process (so the collor change as well '''
+				self.tree.tag_configure('process_alerts', background=color)
+				self.visual_drag.tag_configure('process_alerts', background=color)
 			queue.put((set_color, ()))
 			time.sleep(0.9)
 
-
 	def show_process_tree(self):
-		global tree_view_data
-		for idx, item in enumerate(tree_view_data):
-			if isinstance(item[1], tuple):
-				item = item[1]
-			self.tree.move(item[0], item[1], idx)
-			self.visual_drag.move(item[0], item[1], idx)
+		''' This function return the table to the main state '''
+		#global tree_view_data
+		#for idx, item in enumerate(tree_view_data):
+		#	if isinstance(item[1], tuple):
+		#		item = item[1]
+		#	self.tree.move(item[0], item[1], idx)
+		#	self.visual_drag.move(item[0], item[1], idx)
+		self.show_original_order()
 
 class NBTab(TreeTable):
 	'''
 	Specific tab for the NootBook class (with functionality to display process properties and jump to main.
 	'''
-	def __init__(self, master, headers, data, jmp_pid_index=None, jmp_pid=None, index_pid=None, name=None, text_by_item=0, resize=False, display=None, progressbar=False):
-		TreeTable.__init__(self, master, headers, data, name, text_by_item, resize, display, progressbar)
+	def __init__(self, master, headers, data, jmp_pid_index=None, jmp_pid=None, index_pid=None, name=None, text_by_item=0, resize=False, display=None):
+		TreeTable.__init__(self, master, headers, data, name, text_by_item, resize, display)
+
+		# Init Class Variables.
 		self.master = master
 		self.jmp_pid_index = int(jmp_pid_index) # the index from the main_table
 		self.jmp_name = jmp_pid # the name of the element (value)        <----- the user should choce on of them.
 		self.index_pid = index_pid # the index where the element value is <-`
+
+		# Bind commands.
 		self.aMenu.add_separator()
 		self.aMenu.add_command(label='Jump to main', command=self.jmp_main)
 		self.properties_menu = Menu(self.aMenu)
 		self.properties_menu.add_command(label='To Main Tab', command=lambda: self.properties_main(top_level=False))
 		self.properties_menu.add_command(label='Separate Tab', command=self.properties_main)
 		self.aMenu.add_cascade(label='Process Properties', menu=self.properties_menu)
-		#self.aMenu.add_command(label='Process Properties', command=self.properties_main)
 
-	def get_item_from_table(self, table, index, value):
-		for item in sorted(table.get_all_children(table.tree, item="", only_opened=False)):
+	def get_item_from_table(self, table, value):
+		'''
+		This function serach for specific item in given table, if the item not found, return None
+		:param table: the table database to search in
+		:param value: the specific value to search (check if equals to the jmp_pid_index [the index of the pid column in the table])
+		:return: item / None
+		'''
+		for item in table.get_all_children(table.tree, item="", only_opened=False):
 			if str(table.tree.item(item[0])['values'][self.jmp_pid_index]) == str(value):
 				return item[0]
 
 	def jmp_main(self):
+		'''
+		Jump and select the specifig process.
+		:return: None
+		'''
 		global main_table
-		child_id = self.get_item_from_table(main_table, self.jmp_pid_index, self.jmp_name or self.tree.item(self.tree.selection()[0])['values'][int(self.index_pid)])
+		child_id = self.get_item_from_table(main_table, self.jmp_name or self.tree.item(self.tree.selection()[0])['values'][int(self.index_pid)])
+
+		# Go and select the process (if exists, else alert the user).
 		if child_id:
 			main_table.tree.focus(child_id)
 			main_table.tree.selection_set(child_id)
@@ -8466,8 +9418,15 @@ class NBTab(TreeTable):
 			messagebox.showerror("Error", "This item doesn't exist", parent=self)
 
 	def properties_main(self, top_level=True):
+		'''
+		Open process properties on selected item.
+		:param top_level: None
+		:return: None
+		'''
 		global main_table
-		child_id = self.get_item_from_table(main_table, self.jmp_pid_index, self.jmp_name or self.tree.item(self.tree.selection()[0])['values'][int(self.index_pid)])
+		child_id = self.get_item_from_table(main_table, self.jmp_name or self.tree.item(self.tree.selection()[0])['values'][int(self.index_pid)])
+
+		# Open the process properties (if exists, else alert the user).
 		if child_id:
 			main_table.OnDoubleClick(None, select=child_id, top_level=top_level)
 		else:
@@ -8477,9 +9436,9 @@ class Modules(NBTab, DllsTable):
 	'''
 	The Modules Treetable(treeview) tab
 	'''
-	def __init__(self, master, headers, data, jmp_pid_index=None, jmp_pid=None, index_pid=None, name=None, text_by_item=0, resize=False, display=None, progressbar=False):
-		NBTab.__init__(self, master, headers, data, jmp_pid_index, jmp_pid, index_pid, name, text_by_item, resize, display, progressbar)
-		DllsTable.__init__(self, master, self, headers, data, name, text_by_item, resize, display, progressbar, pid=4)
+	def __init__(self, master, headers, data, jmp_pid_index=None, jmp_pid=None, index_pid=None, name=None, text_by_item=0, resize=False, display=None):
+		NBTab.__init__(self, master, headers, data, jmp_pid_index, jmp_pid, index_pid, name, text_by_item, resize, display)
+		DllsTable.__init__(self, master, self, headers, data, name, text_by_item, resize, display, pid=4)
 
 class HelpMe(Frame):
 	'''
@@ -8511,11 +9470,6 @@ class HelpMe(Frame):
 		xscrollbar.config(command=text.xview)
 		yscrollbar.config(command=text.yview)
 
-		#txt = scrolledtext.ScrolledText(self, undo=True)
-		#txt['font'] = ('consolas', '12')
-		#txt.insert("1.0", HELP_ME)
-		#txt.pack(expand=True, fill='both')
-		#txt.config(state='disabled')
 #endregion GUI
 
 class VolExp(common.AbstractWindowsCommand):
@@ -8723,7 +9677,6 @@ class VolExp(common.AbstractWindowsCommand):
 			return
 		print "[+] Run Struct Analyze on {}, addr: {}".format(struct_type, addr)
 		threading.Thread(target=run_struct_analyze, args=(struct_type, addr)).start()
-		#run_struct_analyze(struct_type, addr)
 
 	def write(self, addr, data, pid=4, prev_data_len=0):
 		data = "{}{}".format(data, ' '*len(data)-int(prev_data_len) if len(data)-int(prev_data_len) > 0 else '')
@@ -8734,7 +9687,6 @@ class VolExp(common.AbstractWindowsCommand):
 
 		print "[=] The Write Operation:".format(str(result).replace('True', 'succsuse').replace('False', 'Failed'))
 
-	# can crush the program if the handle plugin failed..(error: No suitable address space mapping found)
 	def get_all_handles(self):
 		'''
 		This function get all the process handles to the process_handles global.
@@ -8753,17 +9705,6 @@ class VolExp(common.AbstractWindowsCommand):
 		# https://blogs.msdn.microsoft.com/openspecification/2010/04/01/about-the-access_mask-structure/
 		# https://rayanfam.com/topics/finding-the-real-access-rights-needed-by-handles/
 		# https://rayanfam.com/topics/reversing-windows-internals-part1/
-		ALPC_PORT_ACCESS = {0x1f0001: 'Full Control'}
-
-		HANDLE_ACCESS = {0x1: 'Query',
-						 0x2: 'Modify',
-						 0x4: 'Create objects',
-						 0x100003: 'Synchronize',
-						 0x120089: 'Read',
-
-						 0x1f000f: 'Full Control',
-						 }
-
 		GENERIC_ACCESS = {0x80000000 : 'GENERIC_READ',
 						  0x40000000 : 'GENERIC_WRITE',
 						  0x20000000 : 'GENERIC_EXECUTE',
@@ -8799,7 +9740,6 @@ class VolExp(common.AbstractWindowsCommand):
 							0x00002000: '<Unknown>(0x2000)',
 							0x00004000: '<Unknown>(0x4000)',
 							0x00008000: '<Unknown>(0x8000)'}
-
 
 		TEMPLATE_ACCESS = {
 			'REGULAR':{
@@ -9737,7 +10677,7 @@ class VolExp(common.AbstractWindowsCommand):
 						process_env_var[int(task.UniqueProcessId)][env] = var
 
 		done_run['process_env_var'] = process_env_var
-		print "[+] Done Get Envars"
+		print "[+] Done Get Environment variables"
 		job_queue.put_alert((id, 'VolExp Search Process Environment Variables ', 'Get all process environment variable', 'Done'))
 
 		# Add to job queue
@@ -9757,7 +10697,7 @@ class VolExp(common.AbstractWindowsCommand):
 				self.get_imports(task, task_pid)
 				#threading.Thread(target=self.impscan_func, args=(self._config.PID,)).start()
 			else:
-				print '[+] loaded import from ', task_pid
+				pass#print '[+] loaded import from ', task_pid
 		job_queue.put_alert((id, 'VolExp Search Process Environment Variables ', 'Get all process environment variable', 'Done'))
 		done_run['process_imports'] = process_imports
 		print "[+] Done Get Imports"
@@ -9946,13 +10886,13 @@ class VolExp(common.AbstractWindowsCommand):
 		# Try to run this command (some profile my not support scanning so alert the user if we failed)
 		try:
 			proc = subprocess.check_output(command_line)
-		except:
+		except (subprocess.CalledProcessError, OSError, EOFError):
 			try:
 				proc = subprocess.Popen([command_line],
 										shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
 										stderr=subprocess.PIPE)
 				proc = proc.communicate()[0]
-			except:
+			except (subprocess.CalledProcessError, OSError, EOFError):
 				print
 				"[-] Volatility don't fully support this version (mft parser failed)"
 				return
@@ -10004,13 +10944,13 @@ class VolExp(common.AbstractWindowsCommand):
 		# Try to run this command (some profile my not support scanning so alert the user if we failed)
 		try:
 			proc = subprocess.check_output(command_line)
-		except:
+		except (subprocess.CalledProcessError, OSError, EOFError):
 			try:
 				proc = subprocess.Popen([command_line],
 										shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
 										stderr=subprocess.PIPE)
 				proc = proc.communicate()[0]
-			except:
+			except (subprocess.CalledProcessError, OSError, EOFError):
 				print
 				"[-] Volatility don't fully support this version file scan failed"
 				return
@@ -10094,13 +11034,13 @@ class VolExp(common.AbstractWindowsCommand):
 		# Try to run this command (some profile my not support scanning so alert the user if we failed)
 		try:
 			proc = subprocess.check_output(command_line)
-		except:
+		except (subprocess.CalledProcessError, OSError, EOFError):
 			try:
 				proc = subprocess.Popen([command_line],
 										shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
 										stderr=subprocess.PIPE)
 				proc = proc.communicate()[0]
-			except:
+			except (subprocess.CalledProcessError, OSError, EOFError):
 				print
 				"[-] Volatility don't fully support this version (WinObj failed)"
 				return
@@ -10162,10 +11102,7 @@ class VolExp(common.AbstractWindowsCommand):
 		reg_conf.readonly = {}
 		reg_conf.PROFILE = self._config.PROFILE
 		reg_conf.LOCATION = self._config.LOCATION
-		try:
-			reg_conf.remove_option('ADDRESS')
-		except:
-			pass
+		reg_conf.remove_option('ADDRESS')
 
 		# Get regapi (volatiliry registry api)
 		regapi = registryapi.RegistryApi(reg_conf)
@@ -10215,10 +11152,8 @@ class VolExp(common.AbstractWindowsCommand):
 		regapi_conf.PROFILE = self._config.PROFILE
 		regapi_conf.LOCATION = self._config.LOCATION
 		regapi_conf.optparser.set_conflict_handler("resolve")
-		try:
-			regapi_conf.remove_option('ADDRESS')
-		except:
-			pass
+		regapi_conf.remove_option('ADDRESS')
+
 		# Get volatility registry api
 		reg = registryapi.RegistryApi(regapi_conf)
 		print '[+] start REG_BULD'
@@ -10500,7 +11435,7 @@ class VolExp(common.AbstractWindowsCommand):
 			x = root.winfo_x()
 			y = root.winfo_y()
 			app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
-			Explorer(app, my_dict=mft_explorer ,headers=("File Name", "Creation", "Modified", "MFT alerted", "Access", "Use", "Type", "Link count", "Record number", "Offset"), view_hex=False, searchTitle='Search Form MFT Records', resize=False, relate=app).pack(fill=BOTH, expand=YES)
+			Explorer(app, my_dict=mft_explorer ,headers=("File Name", "Creation", "Modified", "MFT alerted", "Access", "Use", "Type", "Link count", "Record number", "Offset"), searchTitle='Search Form MFT Records', resize=False, relate=app).pack(fill=BOTH, expand=YES)
 			app.title("MFT Files Explorer")
 
 	def s_control_m(self, event):
@@ -10514,7 +11449,7 @@ class VolExp(common.AbstractWindowsCommand):
 		if mft_explorer == {}:
 			messagebox.showwarning('Notice', 'Still searching for the information\nPlease try again later.')
 		else:
-			frame = Explorer(self.NoteBook, my_dict=mft_explorer ,headers=("File Name", "Creation", "Modified", "MFT alerted", "Access", "Use", "Type", "Link count", "Record number", "Offset"), view_hex=False, searchTitle='Search Form MFT Records', relate=root)
+			frame = Explorer(self.NoteBook, my_dict=mft_explorer ,headers=("File Name", "Creation", "Modified", "MFT alerted", "Access", "Use", "Type", "Link count", "Record number", "Offset"), searchTitle='Search Form MFT Records', relate=root)
 			self.NoteBook.add(frame, text="MFT Files Explorer")
 
 	def control_w(self, event):
@@ -10534,8 +11469,7 @@ class VolExp(common.AbstractWindowsCommand):
 			x = root.winfo_x()
 			y = root.winfo_y()
 			app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
-			Explorer(app, my_dict=winobj_dict, headers=("Object Name", "Type", "Info", "Addr"), view_hex=False,
-					 searchTitle='Search For Objects', relate=app).pack(fill=BOTH, expand=YES)
+			WinObjExplorer(app, winobj_dict, resize=False, relate=app).pack(fill=BOTH, expand=YES)
 			app.title("WinObj Explorer(Shachaf Atun[KslGroup])")
 			x = root.winfo_x()
 			y = root.winfo_y()
@@ -10555,8 +11489,7 @@ class VolExp(common.AbstractWindowsCommand):
 		elif winobj_dict == {}:
 			messagebox.showwarning('Notice', 'Still searching for the information\nPlease try again later.')
 		else:
-			frame = Explorer(self.NoteBook, my_dict=winobj_dict, headers=("Object Name", "Type", "Info", "Addr"), view_hex=False,
-					 searchTitle='Search For Objects', resize=False, relate=root)
+			frame = WinObjExplorer(self.NoteBook, winobj_dict, resize=False, relate=root)
 			self.NoteBook.add(frame, text="WinObj Explorer")
 
 	def control_e(self, event):
@@ -10574,7 +11507,7 @@ class VolExp(common.AbstractWindowsCommand):
 			x = root.winfo_x()
 			y = root.winfo_y()
 			app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
-			FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"), view_hex=True, searchTitle='Search For Files', relate=app).pack(fill=BOTH, expand=YES)
+			FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"), searchTitle='Search For Files', relate=app).pack(fill=BOTH, expand=YES)
 			app.title("Files Explorer")
 			app.geometry("1400x650")
 
@@ -10589,7 +11522,7 @@ class VolExp(common.AbstractWindowsCommand):
 		if files_scan == {}:
 			messagebox.showwarning('Notice', 'Still searching for the information\nPlease try again later.')
 		else:
-			frame = FileExplorer(self.NoteBook, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"), view_hex=True, searchTitle='Search For Files', resize=False, relate=root)
+			frame = FileExplorer(self.NoteBook, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"), searchTitle='Search For Files', resize=False, relate=root)
 			self.NoteBook.add(frame, text="Files Explorer")
 
 	def control_r(self, event):
@@ -10622,10 +11555,7 @@ class VolExp(common.AbstractWindowsCommand):
 				regapi_conf.readonly = {}
 				regapi_conf.PROFILE = self._config.PROFILE
 				regapi_conf.LOCATION = self._config.LOCATION
-				try:
-					regapi_conf.remove_option('ADDRESS')
-				except:
-					pass
+				regapi_conf.remove_option('ADDRESS')
 				regapi = registryapi.RegistryApi(regapi_conf)
 				queue.put((create_the_gui, (regapi,)))
 
@@ -10654,10 +11584,7 @@ class VolExp(common.AbstractWindowsCommand):
 				regapi_conf.readonly = {}
 				regapi_conf.PROFILE = self._config.PROFILE
 				regapi_conf.LOCATION = self._config.LOCATION
-				try:
-					regapi_conf.remove_option('ADDRESS')
-				except:
-					pass
+				regapi_conf.remove_option('ADDRESS')
 				regapi = registryapi.RegistryApi(regapi_conf)
 				queue.put((create_the_gui, (regapi,)))
 
@@ -10702,15 +11629,10 @@ class VolExp(common.AbstractWindowsCommand):
 
 		# Show message and return if we don't Gather this information.
 		if process_dlls.has_key(4):
-			modev_data = [(item[item.rfind('\\')+1:], item,
-						   process_bases[4]['dlls'][item[item.rfind('\\')+1:]] if process_bases[4]['dlls'].has_key(
-							   item[item.rfind('\\')+1:]) else -1) for item in process_dlls[4]]
+			modev_data = [(item[item.rfind('\\')+1:], item) + ((process_bases[4]['dlls'][item[item.rfind('\\')+1:]], process_bases[4]['ldr'][item[item.rfind('\\')+1:]]) if process_bases[4]['dlls'].has_key(item[item.rfind('\\')+1:]) else (-1, -1)) for item in process_dlls[4]]
 			modules_table = Modules(self.NoteBook, jmp_pid_index=1, jmp_pid=4,
-									   headers=("Name", "Path", "Address"),
+									   headers=("Name", "Path", "Dll Base", "LDR Address"),
 									   data=modev_data, resize=True)
-			modules_table.aMenu.add_command(label='Struct Analysis',
-												 command=lambda: self.run_struct_analyze('_DEVICE_OBJECT',
-																						 self.modules_table.tree))
 			modules_table.pack(side=TOP, fill=BOTH)
 			self.NoteBook.add(modules_table, text='Modules')
 		else:
@@ -10773,6 +11695,61 @@ class VolExp(common.AbstractWindowsCommand):
 				if thread.name == "pfn_stuff" and thread.is_alive():
 					messagebox.showwarning('Notice', 'Still searching for the information\nThe information displayed here will update next time you enter this window\nPlease try again later.')
 
+	def view_comments(self, event=None):
+		''' Create the view comments gui '''
+
+		# Init variables.
+		app = tk.Toplevel()
+		x = root.winfo_x()
+		y = root.winfo_y()
+		app.geometry("+%d+%d" % (x + ABS_X, y + ABS_Y))
+		app.geometry("900x620")
+		app.title('User Comments')
+		label = ttk.Label(app, text="Here you can get information about all of your comments.")
+		label.pack(side="top", fill="x", pady=10)
+		pw = PanedWindow(app, orient='vertical')
+		process_headers = ('Process Pid', 'Process Comment')
+		process_data = []
+		files_headers = ('Process Pid', 'PE Path', 'PE Comment')
+		files_data = []
+
+		# Go all over the pids.
+		for pid in process_dlls:
+
+			# Get the processes comment (if this is not the default).
+			if not (process_comments[pid] == "Write Your Comments Here." or (process_comments[pid].startswith("Write Your Comments Here.") and process_comments[pid].endswith(")."))):
+				process_data.append((pid, process_comments[pid]))
+				first = True
+				for line in process_comments[pid].splitlines():
+					if first:
+						first = False
+						continue
+					process_data.append((pid, line))
+			
+			# Go all over the files inside each process.
+			for path in pe_comments['pid'][pid]:
+				
+				# Get the file comment (if this is not the default).
+				if pe_comments['pid'][pid][path][0] != "Write Your Comments Here.":
+					files_data.append((pid, path, pe_comments['pid'][pid][path]))
+					first = True
+					for line in pe_comments[pid][path][0].splitlines():
+						if first:
+							first = False
+							continue
+						files_data.append((pid, line))
+
+		# Pack the tables.
+		process_treetable = TreeTable(pw, headers=process_headers, data=process_data)
+		process_treetable.tree['height'] = 12 if 12 < len(process_data) else len(process_data)
+		process_treetable.pack(expand=YES, fill=BOTH)
+		pw.add(process_treetable)
+		files_treetable = TreeTable(pw, headers=files_headers, data=files_data)
+		files_treetable.tree['height'] = 12 if 12 < len(files_data) else len(files_data)
+		files_treetable.pack(expand=YES, fill=BOTH)
+		pw.add(files_treetable)
+		pw.pack(expand=YES, fill=BOTH)
+
 	# endregion controle+key event handles.
 
 	def about(self, event=None):
@@ -10796,6 +11773,7 @@ class VolExp(common.AbstractWindowsCommand):
 		global done_run
 		global queue
 		global user_sids
+		global lock
 
 		# Return if the user don't have pycrypto install
 		if not has_crypto:
@@ -10826,6 +11804,7 @@ class VolExp(common.AbstractWindowsCommand):
 			global tree_view_data
 			global files_info
 			global process_security
+			global lock
 
 			# Token security attributes:
 			"""
@@ -10846,149 +11825,152 @@ class VolExp(common.AbstractWindowsCommand):
 			privileges.PRIVILEGE_INFO[36] = ("SeDelegateSessionUserImpersonatePrivilege",
 											 "Obtain an impersonation token for another user in the same session.")
 
-			with lock:
-				rows = set(main_table.get_all_children(main_table.tree, "", False))
-				main_table.show_process_tree()
+			rows = main_table.get_all_children(main_table.tree, "", False)
+			main_table.show_process_tree()
 
-				# Go all over the rows in the main table row is a tuple(row_id, row_parent_id)
-				for row in rows:
-					#tree_view_data[count] = row
+			# Go all over the rows in the main table row is a tuple(row_id, row_parent_id)
+			for row in rows:
+				#tree_view_data[count] = row
 
-					# we need now only the row id
-					row = row[0]
+				# we need now only the row id
+				row = row[0]
 
-					# Get all the data from the main table
-					process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc = main_table.tree.item(row)['values']
+				# Get all the data from the main table
+				process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc = main_table.tree.item(row)['values']
 
-					# Get the EPROCESS struct.
-					e_proc = obj.Object('_EPROCESS', e_proc, self.kaddr_space)
+				# Get the EPROCESS struct.
+				e_proc = obj.Object('_EPROCESS', e_proc, self.kaddr_space)
 
-					# Update the users information (only if has pycrypto install)
-					if has_crypto:
-						# Create process_security[pid] if not exists
-						if not process_security.has_key(int(pid)):
-							process_security[int(pid)] = {}
+				# Update the users information (only if has pycrypto install)
+				if has_crypto:
+					# Create process_security[pid] if not exists
+					if not process_security.has_key(int(pid)):
+						process_security[int(pid)] = {}
 
-						# Empty/Create the process_security[pid]['Groups'] (the process group security).
-						# process_security[int(pid)]['Groups'] = [] # (overid the list[index] instead)
+					# Empty/Create the process_security[pid]['Groups'] (the process group security).
+					# process_security[int(pid)]['Groups'] = [] # (overid the list[index] instead)
 
-						# Get the token
-						token = e_proc.get_token()
-						sid_count = 0
+					# Get the token
+					token = e_proc.get_token()
+					sid_count = 0
 
-						# If token valid.
-						if token and token.is_valid():
-							first_sid_name = True
-							sid_name = "Unable To Find"
+					# If token valid.
+					if token and token.is_valid():
+						first_sid_name = True
+						sid_name = "Unable To Find"
 
-							# Go all over the sids for this token and insert them the right user name (that we get from searching
-							# in the registry using GetSIDs plugin)
-							for sid_string in token.get_sids():
-								update_security = True
+						# Go all over the sids for this token and insert them the right user name (that we get from searching
+						# in the registry using GetSIDs plugin)
+						for sid_string in token.get_sids():
+							update_security = True
 
-								# Get a name for this sid
-								if sid_string in getsids.well_known_sids:
-									sid_name = str(getsids.well_known_sids[sid_string])
-								elif sid_string in getsids.getservicesids.servicesids:
-									sid_name = str(getsids.getservicesids.servicesids[sid_string])
-								elif sid_string in user_sids:
-									sid_name = str(user_sids[sid_string])
+							# Get a name for this sid
+							if sid_string in getsids.well_known_sids:
+								sid_name = str(getsids.well_known_sids[sid_string])
+							elif sid_string in getsids.getservicesids.servicesids:
+								sid_name = str(getsids.getservicesids.servicesids[sid_string])
+							elif sid_string in user_sids:
+								sid_name = str(user_sids[sid_string])
+							else:
+								sid_name_re = getsids.find_sid_re(sid_string, getsids.well_known_sid_re)
+								if sid_name_re:
+									sid_name = str(sid_name_re)
 								else:
-									sid_name_re = getsids.find_sid_re(sid_string, getsids.well_known_sid_re)
-									if sid_name_re:
-										sid_name = str(sid_name_re)
-									else:
-										sid_name = ""
+									sid_name = ""
 
-								c_index = 0
-								for tup in process_security[int(pid)]['Groups']:
-									if sid_string == tup[1]:
-										break
+							c_index = 0
+							for tup in process_security[int(pid)]['Groups']:
+								if sid_string == tup[1]:
+									break
 
-									c_index += 1
+								c_index += 1
+							else:
+								proc_token_sid_array = token.UserAndGroups.dereference()
+								attr = proc_token_sid_array[sid_count].Attributes
+								if attr > 9999:
+									sid_flag = 'Logon ID'
 								else:
-									proc_token_sid_array = token.UserAndGroups.dereference()
-									attr = proc_token_sid_array[sid_count].Attributes
-									if attr > 9999:
-										sid_flag = 'Logon ID'
+									for sid_secure in token_security_attributes:
+										if int(attr) == sid_secure:
+											sid_flag = token_security_attributes[
+												sid_secure] if sid_secure in token_security_attributes else str(
+												sid_secure)
+											break
 									else:
-										for sid_secure in token_security_attributes:
-											if int(attr) == sid_secure:
-												sid_flag = token_security_attributes[
-													sid_secure] if sid_secure in token_security_attributes else str(
-													sid_secure)
-												break
-										else:
-											sid_flag = 'Unsupported ({})'.format(attr)
-									update_security = False
-									process_security[int(pid)]['Groups'].append((sid_name, sid_string, sid_flag))
+										sid_flag = 'Unsupported ({})'.format(attr)
+								update_security = False
+								process_security[int(pid)]['Groups'].append((sid_name, sid_string, sid_flag))
 
-								# Update the process_security (if we didnt add one).
-								if update_security:
-									process_security[int(pid)]['Groups'][c_index] = ((sid_name, sid_string, process_security[int(pid)]['Groups'][c_index][2]))
+							# Update the process_security (if we didnt add one).
+							if update_security:
+								process_security[int(pid)]['Groups'][c_index] = ((sid_name, sid_string, process_security[int(pid)]['Groups'][c_index][2]))
 
-								if first_sid_name:
-									first_sid_name = False
-									un = sid_name
+							if first_sid_name:
+								first_sid_name = False
+								un = sid_name
 
-								sid_count += 1
+							sid_count += 1
 
-						# Set  the user name if we didnt find it yet (if this still Searching...)
-						un = "Unable To Find" if un == "Searching..." else un
+					# Set  the user name if we didnt find it yet (if this still Searching...)
+					un = "Unable To Find" if un == "Searching..." else un
 
 
-					# Get file information from verinfo
-					path = e_proc.Peb.ProcessParameters.ImagePathName
+				# Get file information from verinfo
+				path = e_proc.Peb.ProcessParameters.ImagePathName
 
-					# Check if we have information of this process file (we probably get this information in the
-					# self.get_proc_verinfo function)
-					if files_info.has_key(str(path).lower()):
+				# Check if we have information of this process file (we probably get this information in the
+				# self.get_proc_verinfo function)
+				if files_info.has_key(str(path).lower()):
 
-						# Get the company name of this file
-						if files_info[str(path).lower()].has_key("CompanyName"):
-							cn = files_info[str(path).lower()]["CompanyName"]
+					# Get the company name of this file
+					if files_info[str(path).lower()].has_key("CompanyName"):
+						cn = files_info[str(path).lower()]["CompanyName"]
 
-						# Get the description of this file
-						if files_info[str(path).lower()].has_key("FileDescription"):
-							Description = files_info[str(path).lower()]["FileDescription"]
+					# Get the description of this file
+					if files_info[str(path).lower()].has_key("FileDescription"):
+						Description = files_info[str(path).lower()]["FileDescription"]
 
-						# Get the version of this file
-						if files_info[str(path).lower()].has_key("FileVersion"):
-							version = files_info[str(path).lower()]["FileVersion"]
+					# Get the version of this file
+					if files_info[str(path).lower()].has_key("FileVersion"):
+						version = files_info[str(path).lower()]["FileVersion"]
 
-						# Get the internal name for this file
-						if files_info[str(path).lower()].has_key("InternalName"):
-							intName = files_info[str(path).lower()]["InternalName"]
+					# Get the internal name for this file
+					if files_info[str(path).lower()].has_key("InternalName"):
+						intName = files_info[str(path).lower()]["InternalName"]
 
-						# Get the original file name of this file
-						if files_info[str(path).lower()].has_key("OriginalFilename"):
-							ofn = files_info[str(path).lower()]["OriginalFilename"]
+					# Get the original file name of this file
+					if files_info[str(path).lower()].has_key("OriginalFilename"):
+						ofn = files_info[str(path).lower()]["OriginalFilename"]
 
-					# Update the table (and the visual table)
-					main_table.tree.item(row, values=(process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc))
-					main_table.visual_drag.item(row, values=(process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc))
+				# Update the table (and the visual table)
+				main_table.tree.item(row, values=(process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc))
+				main_table.visual_drag.item(row, values=(process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc))
 
-					count = 0
-					# Update the new list
-					for found_item in self.list_all:
-						if int(found_item[1]) == pid:
-							break
-						count += 1
+				count = 0
+				# Update the new list
+				for found_item in self.list_all:
+					if int(found_item[1]) == pid:
+						break
+					count += 1
 
-					self.list_all[count] = ([str(this_item) for this_item in [self.list_all[count][0], pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc]])
+				self.list_all[count] = ([str(this_item) for this_item in [self.list_all[count][0], pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc]])
 
-					# if len(process_tree_data) > count:
-					process_tree_data[count] = ([str(this_item) for this_item in [self.list_all[count][0], pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc]])
+				# if len(process_tree_data) > count:
+				process_tree_data[count] = ([str(this_item) for this_item in [self.list_all[count][0], pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc]])
 
-				# If the user didn't change the default display then append to this display the company name and file description
-				self.treetable.tree["displaycolumns"] = self.treetable.headers[1:8] if self.treetable.tree["displaycolumns"] == self.treetable.headers[1:6] else self.treetable.tree["displaycolumns"]
+			# If the user didn't change the default display then append to this display the company name and file description
+			self.treetable.tree["displaycolumns"] = self.treetable.headers[1:8] if self.treetable.tree["displaycolumns"] == self.treetable.headers[1:6] else self.treetable.tree["displaycolumns"]
 
-				# Update the tree_view_data
-				tree_view_data = [(main_table.tree.set(child[0], 'Process'), child)
-						for child in main_table.get_all_children(main_table.tree)]
+			# Update the tree_view_data
+			tree_view_data = [(main_table.tree.set(child[0], 'Process'), child)
+					for child in main_table.get_all_children(main_table.tree)]
 
-				# Update done_run
-				done_run['process_security'] = process_security
+			# Update done_run
+			done_run['process_security'] = process_security
+			
+			lock.release()
+
+		lock.acquire()
 
 		# Send a message to the user that the gui will stop working for couple of seconds
 		queue.put((messagebox.showinfo, ("Please Wait!", "The GUI will be unavailable for a couple of seconds..\nUpdating all files and user information in the main table (you can view them using select column [ctrl+c])\nNow we will start creating the Registry Explorer(view using view - > Registry Explorer the items will update at runtime)")))
@@ -11078,6 +12060,7 @@ class VolExp(common.AbstractWindowsCommand):
 						new_dic[pid] = {"proc":None, "dlls":{}}
 						new_dic[pid]["dlls"] = dict(process_bases[pid]['dlls'])
 						new_dic[pid]["proc"] = str(process_bases[pid]['proc'].v()).strip('L')
+						new_dic[pid]["ldr"] = dict(process_bases[pid]['dlls'])
 						done_run[dict_name] = new_dic
 
 				saved_data[dict_name] = done_run[dict_name]
@@ -11287,6 +12270,7 @@ class VolExp(common.AbstractWindowsCommand):
 				process_threads[int(pid)] = {}
 			process_bases[int(pid)] = {"proc": e_proc, "dlls": {}}
 			process_bases[int(pid)]["dlls"] = {}
+			process_bases[int(pid)]["ldr"] = {}
 			process_dlls[int(pid)] = []
 
 			# Create a dictionary inside the process_security[pid] if not exists.
@@ -11548,7 +12532,8 @@ class VolExp(common.AbstractWindowsCommand):
 				for mod in modlist:
 					if not process_bases[int(pid)]["dlls"].has_key(str(mod.BaseDllName)):
 						process_dlls[int(pid)].append(str(mod.FullDllName or 'Failed to get device name on address: {}'.format(mod.DllBase)))
-						process_bases[int(pid)]["dlls"][str(mod.BaseDllName)] = int(mod.DllBase)  # yoram
+						process_bases[int(pid)]["dlls"][str(mod.BaseDllName)] = int(mod.DllBase)
+						process_bases[4]['ldr'][str(mod.BaseDllName)] = int(mod.obj_offset)
 						if not pe_comments['pid'][int(pid)].has_key(str(mod.FullDllName or 'Failed to get device name on address: {}'.format(mod.DllBase))):
 							pe_comments['pid'][int(pid)][str(mod.FullDllName or 'Failed to get device name on address: {}'.format(mod.DllBase))] = ['Write Your Comments Here.', 'white']
 
@@ -11557,7 +12542,8 @@ class VolExp(common.AbstractWindowsCommand):
 				for c_dll in e_proc.get_load_modules():
 					if not process_bases[int(pid)]["dlls"].has_key(str(c_dll.BaseDllName)):
 						process_dlls[int(pid)].append(str(c_dll.FullDllName or 'Failed to get dll name on address: {}'.format(c_dll.DllBase)))
-						process_bases[int(pid)]["dlls"][str(c_dll.BaseDllName)] = int(c_dll.DllBase)  # yoram
+						process_bases[int(pid)]["dlls"][str(c_dll.BaseDllName)] = int(c_dll.DllBase)
+						process_bases[int(pid)]['ldr'][str(c_dll.BaseDllName)] = int(c_dll.obj_offset)
 						if not pe_comments['pid'][int(pid)].has_key(str(c_dll.FullDllName or 'Failed to get dll name on address: {}'.format(c_dll.DllBase))):
 							pe_comments['pid'][int(pid)][str(c_dll.FullDllName or 'Failed to get dll name on address: {}'.format(c_dll.DllBase))] = ['Write Your Comments Here.', 'white']
 
@@ -11619,7 +12605,7 @@ class VolExp(common.AbstractWindowsCommand):
 					self.list_all[count] = [str(this_item) for this_item in (process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc)]
 					# Update the table (and the visual table)
 					def update_table(data):
-						rows = set(main_table.get_all_children(main_table.tree, "", False))
+						rows = main_table.get_all_children(main_table.tree, "", False)
 						for row, row_parent in rows:
 							process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc = main_table.tree.item(row)['values']
 							if (int(pid), int(ppid)) == (int(data[1]), int(data[2])) :
@@ -11661,31 +12647,15 @@ class VolExp(common.AbstractWindowsCommand):
 		new_proc_ppid = process_data[2]
 
 
-		rows =  set(main_table.get_all_children(main_table.tree, "", False))
+		rows =  main_table.get_all_children(main_table.tree, "", False)
 		for row, row_parent in rows:
 			item = process, pid, ppid, cpu, pb, ws, Description, cn, dep, aslr, cfg, protection, isDebug, Prefetch, threads, handles, un, session, noh, sc, pfc, di, it, cs, winStatus, integrity, priority, ct, cycles, wsp, ppd, pwss, vs, pvs, createT, intName, ofn, wt, cl, path, cd, version, e_proc = main_table.tree.item(row)['values']
 
 			if pid == new_proc_ppid:
-
+				item = [str(c_item).replace('{', r'\{').replace('}', r'\}').decode('utf-8',errors='ignore') for c_item in item]
 				c_tag = re.sub('[^\S0-9a-zA-Z]', '_', str(item[self.text_by_item]))
-				try:
-					main_table.tree.insert(row, END, values=item, text=item[main_table.text_by_item], tags=c_tag)
-					main_table.visual_drag.insert(row, END, values=item, text=item[main_table.text_by_item], tags=c_tag)
-				except:
-					try:
-						main_table.visual_drag.insert(row, END, values=item, text=item[main_table.text_by_item], tag=c_tag)
-					except:
-						pass
-					try:
-						main_table.tree.insert(row, END, values=item, text=item[main_table.text_by_item])
-						main_table.visual_drag.insert(row, END, values=item, text=item[main_table.text_by_item])
-					except:
-						try:
-							main_table.visual_drag.insert(row, END, values=item, text=item[main_table.text_by_item])
-						except:
-							pass
-						print '[-] failed to insert {} to the table'.format(item[main_table.text_by_item])
-
+				main_table.tree.insert(row, END, values=item, text=item[main_table.text_by_item], tags=c_tag)
+				main_table.visual_drag.insert(row, END, values=item, text=item[main_table.text_by_item], tags=c_tag)
 				break
 
 
@@ -11777,6 +12747,7 @@ class VolExp(common.AbstractWindowsCommand):
 			process_comments[int(pid)] = "Write Your Comments Here."
 			process_bases[int(pid)] = {"proc": e_proc, "dlls": {}}
 			process_bases[int(pid)]["dlls"] = {}
+			process_bases[int(pid)]["ldr"] = {}
 			process_dlls[int(pid)] = []
 			pe_comments['pid'][int(pid)] = {}
 
@@ -11948,14 +12919,16 @@ class VolExp(common.AbstractWindowsCommand):
 			if pid == 4:
 				modlist = win32.modules.lsmod(self.kaddr_space)
 				for mod in modlist:
-					process_dlls[int(pid)].append(str(mod.FullDllName or 'Failed to get device name on address: {}'.format(mod.DllBase)))
-					process_bases[int(pid)]["dlls"][str(mod.BaseDllName)] = int(mod.DllBase) # yoram
-					pe_comments['pid'][int(pid)][str(mod.FullDllName or 'Failed to get device name on address: {}'.format(mod.DllBase))] = ['Write Your Comments Here.', 'white']
+					process_dlls[4].append(str(mod.FullDllName or 'Failed to get device name on address: {}'.format(mod.DllBase)))
+					process_bases[4]["dlls"][str(mod.BaseDllName)] = int(mod.DllBase)
+					process_bases[4]['ldr'][str(mod.BaseDllName)] = int(mod.obj_offset)
+					pe_comments['pid'][4][str(mod.FullDllName or 'Failed to get device name on address: {}'.format(mod.DllBase))] = ['Write Your Comments Here.', 'white']
 			# Get all process load dlls.
 			else:
 				for c_dll in e_proc.get_load_modules():
 					process_dlls[int(pid)].append(str(c_dll.FullDllName or 'Failed to get dll name on address: {}'.format(c_dll.DllBase)))
-					process_bases[int(pid)]["dlls"][str(c_dll.BaseDllName)] = int(c_dll.DllBase)  # yoram
+					process_bases[int(pid)]["dlls"][str(c_dll.BaseDllName)] = int(c_dll.DllBase)
+					process_bases[int(pid)]['ldr'][str(c_dll.BaseDllName)] = int(c_dll.obj_offset)
 					pe_comments['pid'][int(pid)][str(c_dll.FullDllName or 'Failed to get dll name on address: {}'.format(c_dll.DllBase))] = ['Write Your Comments Here.', 'white']
 
 			process = "{} {}".format(proc_T[1] * "?\?", e_proc.ImageFileName)
@@ -12010,6 +12983,7 @@ class VolExp(common.AbstractWindowsCommand):
 		global root
 		global lock
 		global queue
+		global main_table
 
 		# Wish you lock <3
 		print "GL & HF <3 ATZ\n"
@@ -12112,8 +13086,7 @@ class VolExp(common.AbstractWindowsCommand):
 			'''
 			if messagebox.askokcancel("Quit",
 									  "Do you really wish to quit?\n\nRECOMMENDED: saving your data onto a file before exiting allows you to later run it (using the -s option) without having to load"):
-				root.destroy()
-				os._exit(1)
+				self._run_main_loop = False
 		root.protocol("WM_DELETE_WINDOW", on_exit)
 
 		# Config some widget for the main tab.
@@ -12121,7 +13094,7 @@ class VolExp(common.AbstractWindowsCommand):
 		root.NoteBook = self.NoteBook = NoteBook(root)
 		self.pw = PanedWindow(self.NoteBook, orient='vertical')
 		self.list_all = list_all
-		treetable = ProcessesTable(self.pw, headers=headers, data=list_all, text_by_item=1, resize=True, display=headers[1:6])
+		main_table = treetable = ProcessesTable(self.pw, headers=headers, data=list_all, text_by_item=1, resize=True, display=headers[1:6])
 		self.frames["Processes"] = treetable
 		self.treetable = treetable
 		treetable.tree['height'] = 12 if 12 < len(list_all) else len(list_all)
@@ -12170,6 +13143,8 @@ class VolExp(common.AbstractWindowsCommand):
 		view_menu_bar.add_separator()
 		view_menu_bar.add_command(label="Select Columns... (Ctrl+c)", command=self.treetable.header_selected)
 		view_menu_bar.add_command(label="Unalert all processes... (Ctrl+u)", command=self.treetable.unalert_all)
+		view_menu_bar.add_separator()
+		view_menu_bar.add_command(label="All your comments (Ctrl+a)", command=self.view_comments)
 		find_menu_bar.add_command(label="Find Handles and Dlls (Ctrl+f)", command=lambda: self.treetable.control_f(0))
 		dump_menu.add_command(label="Dump Registry Hives", command=self.dump_reg)
 		dump_menu.add_command(label="Dump Event Log", command=self.dump_event_log)
@@ -12209,7 +13184,7 @@ class VolExp(common.AbstractWindowsCommand):
 												 "On windows the default alingment is from right to left\nDo you want to change it to display from left from right (RECOMMENDED)")
 					if ans == 'yes':
 						print subprocess.check_output(r'REG ADD "HKCU\SOFTWARE\microsoft\windows nt\currentversion\windows" /v MenuDropAlignment /t REG_SZ /d 1 /f'), 'please logoff and on to make this work.'
-			except:
+			except Exception:
 				print '[-] sorry unable to change the alingment'
 
 		self.style.configure('blue.Horizontal.TProgressbar', background='blue')
@@ -12329,15 +13304,14 @@ class VolExp(common.AbstractWindowsCommand):
 
 		# Check if we already have the modules.
 		if process_dlls.has_key(4):
-			modev_data = [(item[item.rfind('\\')+1:], item, process_bases[4]['dlls'][item[item.rfind('\\')+1:]] if process_bases[4]['dlls'].has_key(item[item.rfind('\\')+1:]) else -1) for item in process_dlls[4]]
+			modev_data = [(item[item.rfind('\\')+1:], item) + ((process_bases[4]['dlls'][item[item.rfind('\\')+1:]], process_bases[4]['ldr'][item[item.rfind('\\')+1:]]) if process_bases[4]['dlls'].has_key(item[item.rfind('\\')+1:]) else (-1, -1)) for item in process_dlls[4]]
 		else:
 			modev_data = []
 
 		# Create the module tab
 		self.modules_table = Modules(self.NoteBook, jmp_pid_index=1, jmp_pid=4,
-									   headers=("Name", "Path", "Address"),
+									   headers=("Name", "Path", " Dll Base", "LDR Address"),
 									   data=modev_data, resize=True)
-		self.modules_table.aMenu.add_command(label='Struct Analysis', command=lambda: self.run_struct_analyze('_DEVICE_OBJECT', self.modules_table.tree))
 		self.frames['Modules'] = self.modules_table
 		self.modules_table.pack(side=TOP, fill=BOTH)
 		self.NoteBook.add(self.modules_table, text='Modules')
@@ -12509,6 +13483,8 @@ class VolExp(common.AbstractWindowsCommand):
 		root.bind('<Control-w>', self.control_w)
 		root.bind('<Control-o>', self.popup_options)
 		root.bind('<Control-O>', self.popup_options)
+		root.bind('<Control-a>', self.view_comments)
+		root.bind('<Control-A>', self.view_comments)
 		root.bind('<F11>', self.control_h)
 		root.bind('<F1>', self.control_h)
 		
@@ -12527,7 +13503,8 @@ class VolExp(common.AbstractWindowsCommand):
 		# My implemantion of root.mainloop() (to make tkinter "thread safe")
 		vol_debug = open(os.path.join(os.path.split(self._vol_path)[0], 'volexp_debug.log'), 'wb')
 		vol_debug.write('{}\nStart New -->'.format('-'*80))
-		while True:
+		self._run_main_loop = True
+		while self._run_main_loop:
 			root.update()
 			root.update_idletasks()
 
@@ -12553,8 +13530,9 @@ class VolExp(common.AbstractWindowsCommand):
 					func()
 
 		# Kill the program if the user exit.
+		root.destroy()
+		os._exit(1)
 		sys.exit()
-
 
 	def render_json(self, outfd, data):
 		'''
@@ -12564,7 +13542,7 @@ class VolExp(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
-		print '[<3] Hop you find what you need bye bye'
+		print '[<3] Hope you find what you need bye bye'
 		sys.exit(1)
 
 class StructAnalyze(common.AbstractWindowsCommand):
@@ -12574,26 +13552,35 @@ class StructAnalyze(common.AbstractWindowsCommand):
 		common.AbstractWindowsCommand.__init__(self, config, *args, **kwargs)
 		config.add_option('STRUCT', short_option='S', default="_EPROCESS", help='The Struct Type')
 		config.add_option("ADDR", short_option="A", help="The Address Of The Struct")
-		config.add_option("PID", short_option="P", default=4,help="The PID of The process that contains the Struct(if this is not a kernel object)")
+
+		# By Default we check everytime if the struct is_valid and if not we try to recreate it using vm=physical layer, native_vm=kernel_address_space.
+		# If the PID options == Physical than we will create it automaticly using vm=physical (and if that fails vm=physical layer, native_vm=kernel_address_space)
+		config.add_option("PID", short_option="P", default=4,help="The PID of The process that contains the Struct (if this is not a kernel object)\nPhysical for physical address space (vm and native_vm)")
 
 		# Handle User Input.
 		self.kaddr_space = utils.load_as(self._config)
-		if config.PID and config.PID != 4:
-			for task in tasks.pslist(self.kaddr_space):
-				if int(task.UniqueProcessId) == int(config.PID):
-					self.kaddr_space = task.get_process_address_space()
-					if (not config.ADDR) and ((not config.STRUCT) or config.STRUCT.lower() == "_eprocess"):
-						config.ADDR = str(task.v())
-						config.STRUCT = "_EPROCESS"
-					break
+		if (not config.PID) or str(config.PID).lower() != "physical":
+			if config.PID and config.PID != 4:
+				for task in tasks.pslist(self.kaddr_space):
+					if int(task.UniqueProcessId) == int(config.PID):
+						print '[!] Struct Analyze run on with address space of: {} ({})'.format(str(task.ImageFileName), int(task.UniqueProcessId))
+						self.kaddr_space = task.get_process_address_space()
+						if (not config.ADDR) and ((not config.STRUCT) or config.STRUCT.lower() == "_eprocess"):
+							config.ADDR = str(task.v())
+							config.STRUCT = "_EPROCESS"
+						break
 
-		# Start default struct analyze in the kdbg struct
-		elif not config.ADDR:
-			config.ADDR = str(win32.tasks.get_kdbg(self.kaddr_space).v())
-			if "x64" in config.profile:
-				config.STRUCT = "_KDDEBUGGER_DATA64"
-			elif "x86" in config.profile:
-				config.STRUCT = "_KDDEBUGGER_DATA32"
+			# Start default struct analyze in the kdbg struct
+			elif not config.ADDR:
+				config.ADDR = str(win32.tasks.get_kdbg(self.kaddr_space).v())
+				if "x64" in config.profile:
+					config.STRUCT = "_KDDEBUGGER_DATA64"
+				elif "x86" in config.profile:
+					config.STRUCT = "_KDDEBUGGER_DATA32"
+
+		elif config.PID and str(config.PID).lower() == "physical":
+			print '[!] Struct analyze on physical layer.'
+			self.kaddr_space = self.kaddr_space.physical_layer()
 
 		# If the ADDR is hexa set it to int.
 		if config.ADDR and not isinstance(config.ADDR, int) and config.ADDR.startswith("0x"):
@@ -12639,7 +13626,7 @@ class StructAnalyze(common.AbstractWindowsCommand):
 				s2 = str(s + ".{}".format(m.strip()))[str(s + ".{}".format(m.strip())).index('.') + 1:]
 				self.parser(val, t + 1, maxim, s2, c_dict[m])
 
-			except:
+			except Exception:
 				pass
 
 	def get_se_frame(self, master, writeSupport=True):
@@ -12649,7 +13636,7 @@ class StructAnalyze(common.AbstractWindowsCommand):
 		:param writeSupport: Flag if to enable write support to the image.
 		:return: None
 		'''
-		StructExplorer(master, self.struct_dict, self, headers=("Struct Name", "Member Value", "Struct Address", "Object Type"), view_hex=False, searchTitle='Struct Analayzer Search (deeg 3 inside)', writeSupport=writeSupport, relate=master).pack(fill=BOTH, expand=YES)
+		StructExplorer(master, self.struct_dict, self, headers=("Struct Name", "Member Value", "Struct Address", "Object Type"), searchTitle='Struct Analayzer Search (deeg 3 inside)', writeSupport=writeSupport, relate=master).pack(fill=BOTH, expand=YES)
 
 	def calculate(self):
 		'''
@@ -12657,9 +13644,18 @@ class StructAnalyze(common.AbstractWindowsCommand):
 		:return: None
 		'''
 		struct = obj.Object(self._config.STRUCT, self._config.ADDR, self.kaddr_space)
+
+		# Check if this struct specified address is in the physical layer (usually came from scan plugin that scan the physical layer)
+		if not struct or not struct.is_valid():
+			struct = obj.Object(self._config.STRUCT, self._config.ADDR, self.kaddr_space.physical_space(), native_vm=self.kaddr_space)
+			if not struct or not struct.is_valid():
+				struct = obj.Object(self._config.STRUCT, self._config.ADDR, self.kaddr_space)
+			else:
+				self.kaddr_space = self.kaddr_space
+
 		try:
 			self.parser(struct, 0, 3, self._config.STRUCT, self.struct_dict)
-		except:
+		except Exception:
 			raise Exception('[-] unable to parse this object (addr: {}, type: {}), is_valid:{}'.format(self._config.ADDR, self._config.STRUCT, struct.is_valid()))
 
 	def render_text(self, outfd, data):
@@ -12686,9 +13682,23 @@ class StructAnalyze(common.AbstractWindowsCommand):
 		self.get_se_frame(root, flag)
 		root.title("Struct Analayzer {} ({})".format(self._config.STRUCT, self._config.ADDR))
 		root.geometry("950x450")
-		
+
+		# Exit Popup
+		def on_exit(none=None):
+			'''
+			Exit popup
+			:param none: None (support event)
+			:return: None
+			'''
+			if messagebox.askokcancel("Quit",
+									  "Do you really wish to quit?"):
+				self._run_main_loop = False
+		root.protocol("WM_DELETE_WINDOW", on_exit)
+
+		self._run_main_loop = True
+
 		# mainloop
-		while True:
+		while self._run_main_loop:
 			root.update()
 			root.update_idletasks()
 
@@ -12729,7 +13739,7 @@ class StructAnalyze(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
-		print '[<3] Hop you find what you need bye bye'
+		print '[<3] Hope you find what you need bye bye'
 		sys.exit(1)
 
 class WinObjGui(common.AbstractWindowsCommand):
@@ -12772,8 +13782,11 @@ class WinObjGui(common.AbstractWindowsCommand):
 			# If this object is directory search if he have child object.
 			if info[0] == 'Directory':
 				try:
+					if full_path_str.startswith('//'):
+						return
 					winobj_calc.SaveByPath(full_path_str, self.kaddr_space)
 				except Exception as ex:
+					print ex
 					return
 
 				# Go deep inside the directory and find more objects
@@ -12799,6 +13812,12 @@ class WinObjGui(common.AbstractWindowsCommand):
 										full_path_str)
 
 	def win_obj(self, winobj_calc, winobj_dict):
+		'''
+		This function start the winob_builder with the right parameters.
+		:param winobj_calc: winobj calculate
+		:param winobj_dict: the db dict
+		:return: None
+		'''
 		# __init__ importent from winobj plugin.
 		winobj_calc.NAME = 0x1
 		winobj_calc.ADDR = 0x0
@@ -12837,7 +13856,6 @@ class WinObjGui(common.AbstractWindowsCommand):
 		winobj_calc.update_sizes(self.kaddr_space)
 		kdbg = tasks.get_kdbg(self.kaddr_space)
 		root_dir = winobj_calc.get_root_directory(kdbg, self.kaddr_space)
-		print root_dir, self.kaddr_space, winobj_calc.root_obj_list
 		winobj_calc.parse_directory(root_dir, self.kaddr_space, winobj_calc.root_obj_list)
 		winobj_calc.tables["/"] = (root_dir, winobj_calc.root_obj_list)
 		winobj_calc.get_directory(self.kaddr_space)
@@ -12861,16 +13879,21 @@ class WinObjGui(common.AbstractWindowsCommand):
 										'/{}'.format(full_path_str))
 
 	def calculate(self):
+		'''
+		The Calculate function that cal win_obj function,
+		This function return error if winobj is not in the machine.
+		:return: None
+		'''
 		if not has_winobj:
 			debug.error('Please download winobj.py plugin (from the kslgroup github)')
 		winobj_calc = winobj.WinObj(self._config)
 		self.win_obj(winobj_calc, winobj_dict)
-		#                                    memtriage pop from sys.argv
-		if self._config.GET_DICT != 'no' or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
+
+		# If we only want the db dict (like volexp plugin).
+		if self._config.GET_DICT and self._config.GET_DICT != 'no' and self._config.GET_DICT != 'None':
 			with open(self._config.GET_DICT, 'wb') as my_file:
 				pickle.dump(winobj_dict, my_file)
-			if "--plugins=winobjgui" in sys.argv or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
-				sys.exit(1)
+			sys.exit(1)
 		return
 
 	def render_json(self, outfd, data):
@@ -12881,13 +13904,15 @@ class WinObjGui(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
-		print '[<3] Hop you find what you need bye bye'
+		print '[<3] Hope you find what you need bye bye'
 		sys.exit(1)
 
 	def render_text(self, outfd, data):
 		global volself
+		global root
 
-		if self._config.GET_DICT == 'no':
+		if self._config.GET_DICT == 'no' or not self._config.GET_DICT or self._config.GET_DICT == 'None':
+			job_queue.put_alert = job_queue.put
 			outfd.write("GL & HF <3")
 			app = Tk()
 			volself = self
@@ -12895,11 +13920,50 @@ class WinObjGui(common.AbstractWindowsCommand):
 			volself.search_exp_image_icon = volself.search_exp_image.subsample(8, 8)
 			self.img = tk.PhotoImage(data=ICON)
 			app.tk.call('wm', 'iconphoto', app._w, "-default", self.img)
-			Explorer(app, my_dict=winobj_dict, headers=("Object Name", "Type", "Info", "Addr"), view_hex=False,
-					 searchTitle='Search For Objects', relate=app).pack(fill=BOTH, expand=YES)
+			WinObjExplorer(app, winobj_dict, resize=False, relate=app).pack(fill=BOTH, expand=YES)
 			app.title("WinObj Explorer(Shachaf Atun[KslGroup])")
 			app.geometry("700x450")
-			app.mainloop()
+			root = app
+
+			# Exit Popup
+			def on_exit(none=None):
+				'''
+				Exit popup
+				:param none: None (support event)
+				:return: None
+				'''
+				if messagebox.askokcancel("Quit",
+				                          "Do you really wish to quit?"):
+					self._run_main_loop = False
+
+			root.protocol("WM_DELETE_WINDOW", on_exit)
+
+			self._run_main_loop = True
+
+			# mainloop
+			while self._run_main_loop:
+				root.update()
+				root.update_idletasks()
+
+				# If there is function in the Queue then run it.
+				if queue.empty():
+					time.sleep(0.1)
+				else:
+					func, args = queue.get()
+					if len(args) > 0:
+
+						# Get kwargs also in the args (if the last args is tuple ('**kwargs', dict)
+						if type(args[-1]) is tuple and args[-1][0] == '**kwargs':
+
+							# Check if there is also *args or only **kwargs
+							if len(args) > 1:
+								func(*args[:-1], **args[-1][1])
+							else:
+								func(**args[-1][1])
+						else:
+							func(*args)
+					else:
+						func()
 
 class MftParserGui(common.AbstractWindowsCommand):
 	"""MftParser (Explorer GUI plugin)"""
@@ -12964,12 +14028,12 @@ class MftParserGui(common.AbstractWindowsCommand):
 	def calculate(self):
 		parser = mftparser.MFTParser(self._config).calculate()
 		self.mft_parser(parser)
-		#                                    memtriage pop from sys.argv
-		if self._config.GET_DICT != 'no' or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
+
+		# If we only want the db dict (like volexp plugin).
+		if self._config.GET_DICT and self._config.GET_DICT != 'no' and self._config.GET_DICT != 'None':
 			with open(self._config.GET_DICT, 'wb') as my_file:
 				pickle.dump(mft_explorer, my_file)
-			if "--plugins=mftparsergui" in sys.argv or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
-				sys.exit(1)
+			sys.exit(1)
 		return
 
 	def render_json(self, outfd, data):
@@ -12980,13 +14044,13 @@ class MftParserGui(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
-		print '[<3] Hop you find what you need bye bye'
+		print '[<3] Hope you find what you need bye bye'
 		sys.exit(1)
 
 	def render_text(self, outfd, data):
 		global volself
 
-		if self._config.GET_DICT == 'no':
+		if self._config.GET_DICT == 'no' or not self._config.GET_DICT or self._config.GET_DICT == 'None':
 			outfd.write("GL & HF <3")
 			app = Tk()
 			volself = self
@@ -12994,7 +14058,7 @@ class MftParserGui(common.AbstractWindowsCommand):
 			volself.search_exp_image_icon = volself.search_exp_image.subsample(8, 8)
 			self.img = tk.PhotoImage(data=ICON)
 			app.tk.call('wm', 'iconphoto', app._w, "-default", self.img)
-			Explorer(app, my_dict=mft_explorer, headers=("File Name", "Creation", "Modified", "MFT alerted", "Access", "Use", "Type", "Link count", "Record number", "Offset"), view_hex=False, searchTitle='Search Form MFT Records', relate=app).pack(fill=BOTH, expand=YES)
+			Explorer(app, my_dict=mft_explorer, headers=("File Name", "Creation", "Modified", "MFT alerted", "Access", "Use", "Type", "Link count", "Record number", "Offset"), searchTitle='Search Form MFT Records', relate=app).pack(fill=BOTH, expand=YES)
 			app.geometry("700x450")
 			app.title("MFT Explorer")
 			app.mainloop()
@@ -13011,6 +14075,13 @@ class FileScanGui(common.AbstractWindowsCommand):
 		self._config = config
 
 	def file_scan_builder(self, c_dict, path_list, data):
+		'''
+		Build the file scan database dictionary.
+		:param c_dict: current db
+		:param path_list: the path to the file
+		:param data: data of the file (|properties|)
+		:return: None
+		'''
 		global files_scan
 
 		if len(path_list) > 0:
@@ -13025,6 +14096,11 @@ class FileScanGui(common.AbstractWindowsCommand):
 			c_dict["|properties|"] = data
 
 	def file_scan(self, files):
+		'''
+		Call the file scan builder with the right arguments (data and path to the file)
+		:param files: filescan calc
+		:return: None
+		'''
 		global files_scan
 
 		# Get all the data from the filescan plugin and build the tree using file_scan_builder function
@@ -13042,6 +14118,10 @@ class FileScanGui(common.AbstractWindowsCommand):
 				self.file_scan_builder(files_scan, path_list, data)
 
 	def calculate(self):
+		'''
+		Calculate methond, use filescan, shimecachemem, userassis, shimcache, amcache.
+		:return:
+		'''
 		global files_scan
 		files = filescan.FileScan(self._config).calculate()
 		self.file_scan(files)
@@ -13098,12 +14178,11 @@ class FileScanGui(common.AbstractWindowsCommand):
 					shimcachemem_data = [c_data[1] for c_data in scm.generator(calc)]
 					files_scan['?shimcachemem?'] = shimcachemem_data
 
-		#                                    memtriage pop from sys.argv
-		if self._config.GET_DICT != 'no' or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
+		# If we only want the db dict (like volexp plugin).
+		if self._config.GET_DICT and self._config.GET_DICT != 'no' and self._config.GET_DICT != 'None':
 			with open(self._config.GET_DICT, 'wb') as my_file:
 				pickle.dump(files_scan, my_file)
-			if "--plugins=filescangui" in sys.argv or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
-				sys.exit(1)
+			sys.exit(1)
 		return
 
 	def render_json(self, outfd, data):
@@ -13114,14 +14193,14 @@ class FileScanGui(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
-		print '[<3] Hop you find what you need bye bye'
+		print '[<3] Hope you find what you need bye bye'
 		sys.exit(1)
 
 	def render_text(self, outfd, data):
 		global volself
 		global root
 
-		if self._config.GET_DICT == 'no':
+		if self._config.GET_DICT == 'no' or not self._config.GET_DICT or self._config.GET_DICT == 'None':
 			outfd.write("GL & HF <3")
 			app = Tk()
 			volself = self
@@ -13129,13 +14208,28 @@ class FileScanGui(common.AbstractWindowsCommand):
 			volself.search_exp_image_icon = volself.search_exp_image.subsample(8, 8)
 			self.img = tk.PhotoImage(data=ICON)
 			app.tk.call('wm', 'iconphoto', app._w, "-default", self.img)
-			FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"), view_hex=True, searchTitle='Search For Files', relate=app).pack(fill=BOTH, expand=YES)
+			FileExplorer(app, dict=files_scan, headers=("File Name", "Access", "Type", "Pointer Count", "Handle Count", "Offset"), searchTitle='Search For Files', relate=app).pack(fill=BOTH, expand=YES)
 			app.geometry("1400x650")
 			app.title("Files Explorer")
 			root = app
 
+			# Exit Popup
+			def on_exit(none=None):
+				'''
+				Exit popup
+				:param none: None (support event)
+				:return: None
+				'''
+				if messagebox.askokcancel("Quit",
+				                          "Do you really wish to quit?"):
+					self._run_main_loop = False
+
+			root.protocol("WM_DELETE_WINDOW", on_exit)
+
+			self._run_main_loop = True
+
 			# mainloop
-			while True:
+			while self._run_main_loop:
 				root.update()
 				root.update_idletasks()
 
@@ -13209,10 +14303,7 @@ class RegistryGui(common.AbstractWindowsCommand):
 		reg_conf.readonly = {}
 		reg_conf.PROFILE = self._config.PROFILE
 		reg_conf.LOCATION = self._config.LOCATION
-		try:
-			reg_conf.remove_option('ADDRESS')
-		except:
-			pass
+		reg_conf.remove_option('ADDRESS')
 
 		# Get regapi (volatiliry registry api)
 		regapi = registryapi.RegistryApi(reg_conf)
@@ -13307,16 +14398,15 @@ class RegistryGui(common.AbstractWindowsCommand):
 	def calculate(self):
 		self.registry_keys()
 
-		#                                    memtriage pop from sys.argv
-		if self._config.GET_DICT != 'no' or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
+		# If we only want the db dict (like volexp plugin).
+		if self._config.GET_DICT and self._config.GET_DICT != 'no' and self._config.GET_DICT != 'None':
 
 			# Wait to get all the data.
 			for c_thread in self.threads:
 				c_thread.join()
 			with open(self._config.GET_DICT, 'wb') as my_file:
 				pickle.dump(reg_dict, my_file)
-			if "--plugins=registrygui" in sys.argv or (len(sys.argv) > 0 and 'memtriage.py' in sys.argv[0]):
-				sys.exit(1)
+			sys.exit(1)
 		return
 
 	def render_json(self, outfd, data):
@@ -13327,13 +14417,13 @@ class RegistryGui(common.AbstractWindowsCommand):
 		:return: Never return (mainloop inside render_text)
 		'''
 		self.render_text(outfd, data)
-		print '[<3] Hop you find what you need bye bye'
+		print '[<3] Hope you find what you need bye bye'
 		sys.exit(1)
 
 	def render_text(self, outfd, data):
 		global queue
 
-		if self._config.GET_DICT == 'no':
+		if self._config.GET_DICT == 'no' or not self._config.GET_DICT or self._config.GET_DICT == 'None':
 			outfd.write("GL & HF <3")
 			self.app = app = Tk()
 			RegViewer(app, dict=reg_dict, headers=("Key Name", "Creation"), reg_api=self.regapi).pack(fill=BOTH, expand=YES)
