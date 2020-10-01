@@ -5,7 +5,7 @@ This program allows the user to access a Memory Dump. It can also function as a 
 This program functions similarly to Process Explorer/Hacker, but additionally it allows the user access to a Memory Dump (or access the real-time memory on the computer using Memtriage).
 This program can run from Windows, Linux and MacOS machines, but can only use Windows memory images.
 
-## note: volatility explorer for volatility3 coming soon!!
+## note: volatility explorer for volatility3 <https://github.com/memoryforensics1/Vol3xp>
 
 ### Quick Start
 1. Download the volexp.py file (download the memtriage.py file as well and replace it with your memtriage.py file if you want to use memtriage <https://github.com/gleeda/memtriage>).
