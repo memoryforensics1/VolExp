@@ -3895,10 +3895,13 @@ class HexDump(tk.Toplevel):
         # Create all the classes (tabs in the properties).
         for F in (HDHexDump, HDStrings):
             page_name = F.__name__
-            frame = F(parent=tabcontroller, controller=self)
-            self.frames[page_name] = frame
-            frame.grid(row=0, column=0, sticky=E + W + N + S)
-            tabcontroller.add(frame, text=page_name)
+            try:
+                frame = F(parent=tabcontroller, controller=self)
+                self.frames[page_name] = frame
+                frame.grid(row=0, column=0, sticky=E + W + N + S)
+                tabcontroller.add(frame, text=page_name)
+            except Exception:
+                pass
 
         tabcontroller.enable_traversal()
         tabcontroller.pack(fill=BOTH, expand=1)
@@ -12543,7 +12546,7 @@ class VolExp(common.AbstractWindowsCommand):
         # display a messagepopup to the user that the gui will stop working for couple of seconds
         queue.put((MessagePopUp, ('The GUI will be unavailable for a couple of seconds..\nUpdating all files and user information in the main table (you can view them using select column [ctrl+c])\nNow we will start creating the Registry Explorer(view using view - > Registry Explorer the items will update at runtime)',5 , root, "Please Wait!")))
 
-        # Call the update function (will stop the gui for a cuple of seconds).
+        # Call the update function (will stop the gui for a couple of seconds).
         queue.put((main_table_update, (user_sids,)))
 
         # Start running the registry searching Thread
